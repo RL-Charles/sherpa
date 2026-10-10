@@ -1,0 +1,50 @@
+# Release builds: `git tag v0.1.0 && git push origin v0.1.0` runs this in CI.
+version: 2
+project_name: sherpa
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: shp
+    main: ./cmd/shp
+    binary: shp
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/RL-Charles/sherpa/internal/cli.Version={{ .Version }}
+  - id: sherpa
+    main: ./cmd/sherpa
+    binary: sherpa
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/RL-Charles/sherpa/internal/cli.Version={{ .Version }}
+
+archives:
+  - id: default
+    ids: [shp, sherpa]
+    name_template: "sherpa_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - THIRD_PARTY_LICENSES.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"

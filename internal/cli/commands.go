@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,9 +14,12 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
 
 	"github.com/RL-Charles/sherpa/internal/gitinfo"
+	"github.com/RL-Charles/sherpa/internal/importer"
 	"github.com/RL-Charles/sherpa/internal/journal"
+	"github.com/RL-Charles/sherpa/internal/links"
 	"github.com/RL-Charles/sherpa/internal/model"
 	"github.com/RL-Charles/sherpa/internal/render"
 	"github.com/RL-Charles/sherpa/internal/store"
@@ -60,6 +64,7 @@ func (a *app) initCmd() *cobra.Command {
 
 func (a *app) newCmd() *cobra.Command {
 	var n store.NewItem
+	var checks []string
 	cmd := &cobra.Command{
 		Use:   "new <epic|story|ticket> <title...>",
 		Short: "Create an epic, story or ticket",
@@ -78,6 +83,14 @@ func (a *app) newCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if len(checks) > 0 {
+				for _, c := range checks {
+					it.Checks = append(it.Checks, model.Check{Text: c})
+				}
+				if err := a.store.Save(it); err != nil {
+					return err
+				}
+			}
 			if err := a.record(journal.Event{Item: it.ID, Type: "create", Message: it.Title}); err != nil {
 				return err
 			}
@@ -92,6 +105,7 @@ func (a *app) newCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&n.Description, "message", "m", "", "description (markdown)")
 	cmd.Flags().StringVar(&n.Priority, "priority", "", "p0-p3")
 	cmd.Flags().StringSliceVarP(&n.Labels, "label", "l", nil, "labels (repeatable)")
+	cmd.Flags().StringArrayVarP(&checks, "check", "c", nil, "acceptance check (repeatable)")
 	return cmd
 }
 
@@ -221,7 +235,14 @@ func (a *app) showCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Print(render.Markdown(render.Document(it, parent, store.Children(all, it.ID))))
+			doc := render.Document(it, parent, store.Children(all, it.ID), all...)
+			if e, ok := worklog.LastReview(journal.ForItem(events, it.ID)); ok {
+				if card := render.ReviewCard(it, e); card != "" {
+					head := render.DocHeader(it, parent, all...)
+					doc = head + card + strings.TrimPrefix(doc, head)
+				}
+			}
+			fmt.Print(render.Markdown(doc))
 			width := 100
 			if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 20 {
 				width = min(w, 120)
@@ -301,7 +322,7 @@ func (a *app) startCmd() *cobra.Command {
 			// One claim event opens a work session; its commit is the session's
 			// base for diff stats.
 			if err := a.record(journal.Event{Item: it.ID, Type: "claim", From: string(from), To: string(model.InProgress),
-				Commit: gitinfo.Head(a.store.Root)}); err != nil {
+				Commit: gitinfo.Head(a.store.CodeRoot)}); err != nil {
 				return err
 			}
 			return a.done(it)
@@ -343,9 +364,9 @@ Kinds: progress (default), decision, verify, blocker.
 			if err != nil {
 				return err
 			}
-			added, removed := gitinfo.DiffStat(a.store.Root, base, files)
+			added, removed := gitinfo.DiffStat(a.store.CodeRoot, base, files)
 			e := journal.Event{Item: it.ID, Type: "log", Kind: kind, Message: strings.Join(args, " "),
-				Detail: detail, Files: files, Commit: gitinfo.Head(a.store.Root), Added: added, Removed: removed}
+				Detail: detail, Files: files, Commit: gitinfo.Head(a.store.CodeRoot), Added: added, Removed: removed}
 			if err := a.record(e); err != nil {
 				return err
 			}
@@ -401,15 +422,24 @@ Agents must say how the work was verified.`,
 					sessionFiles = append(sessionFiles, f)
 				}
 			}
-			from, err := a.setStatus(it, model.Review)
+			a.linkWork(it)
+			to := model.Review
+			if a.actor.Kind == workflow.Agent { // a human or another agent reviews it first
+				to = model.AgentReview
+			}
+			from, err := a.setStatus(it, to)
 			if err != nil {
 				return err
 			}
-			added, removed := gitinfo.DiffStat(a.store.Root, base, sessionFiles)
-			if err := a.record(journal.Event{Item: it.ID, Type: "submit", From: string(from), To: string(model.Review),
-				Message: summary, Verified: verified, Followups: followups, Files: sessionFiles,
-				Commit: gitinfo.Head(a.store.Root), Added: added, Removed: removed}); err != nil {
+			warnings := reviewWarnings(it)
+			added, removed := gitinfo.DiffStat(a.store.CodeRoot, base, sessionFiles)
+			if err := a.record(journal.Event{Item: it.ID, Type: "submit", From: string(from), To: string(to),
+				Message: summary, Verified: verified, Followups: followups, Files: sessionFiles, Detail: warnings,
+				Commit: gitinfo.Head(a.store.CodeRoot), Added: added, Removed: removed}); err != nil {
 				return err
+			}
+			for _, w := range warnings { // never blocks; the reviewer sees these too
+				fmt.Fprintln(os.Stderr, w)
 			}
 			if active, _ := a.activeID(); active == it.ID {
 				if err := a.setActive(""); err != nil {
@@ -427,11 +457,16 @@ Agents must say how the work was verified.`,
 }
 
 func (a *app) doneCmd() *cobra.Command {
-	var note string
+	var note, approver string
 	cmd := &cobra.Command{
 		Use:   "done <id>",
-		Short: "Mark an item done (humans only)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Mark an item done (humans, or agents with --approved-by)",
+		Long: `Mark an item done.
+
+Agents may only close items in review, and only when a human has explicitly
+told them to: pass that human's name with --approved-by. The journal records
+the agent as the actor and the human as the approver.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := a.load(); err != nil {
 				return err
@@ -440,13 +475,82 @@ func (a *app) doneCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := a.transition(it, model.Done, note); err != nil {
+			if approver == "" {
+				if err := a.transition(it, model.Done, note); err != nil {
+					return err
+				}
+				return a.done(it)
+			}
+			if err := workflow.CheckApprovedDone(a.actor, it, approver); err != nil {
+				return err
+			}
+			from := it.Status
+			it.Status = model.Done
+			if err := a.store.Save(it); err != nil {
+				return err
+			}
+			if err := a.record(journal.Event{Item: it.ID, Type: "status", From: string(from), To: string(model.Done),
+				Message: note, ApprovedBy: approver, Commit: gitinfo.Head(a.store.CodeRoot)}); err != nil {
 				return err
 			}
 			return a.done(it)
 		},
 	}
 	cmd.Flags().StringVarP(&note, "message", "m", "", "note for the worklog")
+	cmd.Flags().StringVar(&approver, "approved-by", "", "human who explicitly approved closing it (required for agents)")
+	return cmd
+}
+
+func (a *app) reviewCmd() *cobra.Command {
+	var notes string
+	var pass, reject bool
+	cmd := &cobra.Command{
+		Use:   "review <id> (--pass | --reject) -m \"notes\"",
+		Short: "Review work in agent review: pass it to human review, or send it back",
+		Long: `Review an item in agent_review, where agent submissions land. A human or
+another agent checks the work, then:
+
+  --pass    moves it to review, where a human signs it off
+  --reject  sends it back to in_progress with what needs fixing
+
+Notes (-m) are required and go in the worklog. To close reviewed work
+outright, use shp done (agents need --approved-by <human>).`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if pass == reject {
+				return errors.New("give exactly one of --pass or --reject")
+			}
+			if strings.TrimSpace(notes) == "" {
+				return errors.New("review notes are required (-m \"…\")")
+			}
+			if err := a.load(); err != nil {
+				return err
+			}
+			it, err := a.store.Get(args[0])
+			if err != nil {
+				return err
+			}
+			if it.Status != model.AgentReview {
+				return fmt.Errorf("%s is %s; shp review is for items in agent_review", it.ID, it.Status)
+			}
+			to, verdict := model.Review, "pass"
+			if reject {
+				to, verdict = model.InProgress, "reject"
+			}
+			from, err := a.setStatus(it, to)
+			if err != nil {
+				return err
+			}
+			if err := a.record(journal.Event{Item: it.ID, Type: "review", Kind: verdict, From: string(from), To: string(to),
+				Message: notes, Commit: gitinfo.Head(a.store.CodeRoot)}); err != nil {
+				return err
+			}
+			return a.done(it)
+		},
+	}
+	cmd.Flags().StringVarP(&notes, "message", "m", "", "review notes (required)")
+	cmd.Flags().BoolVar(&pass, "pass", false, "send it on to human review")
+	cmd.Flags().BoolVar(&reject, "reject", false, "send it back to in progress")
 	return cmd
 }
 
@@ -467,7 +571,7 @@ func (a *app) contextCmd() *cobra.Command {
 				return err
 			}
 			var active *model.Item
-			var inProgress, ready, review []*model.Item
+			var inProgress, ready, agentReview, review []*model.Item
 			for _, it := range all {
 				if it.ID == activeID {
 					active = it
@@ -480,6 +584,8 @@ func (a *app) contextCmd() *cobra.Command {
 					inProgress = append(inProgress, it)
 				case model.Ready:
 					ready = append(ready, it)
+				case model.AgentReview:
+					agentReview = append(agentReview, it)
 				case model.Review:
 					review = append(review, it)
 				}
@@ -487,7 +593,7 @@ func (a *app) contextCmd() *cobra.Command {
 			if a.json {
 				return a.emit(map[string]any{
 					"project": a.store.Config, "actor": a.actor.String(), "session": a.session,
-					"active": active, "in_progress": inProgress, "ready": ready, "review": review,
+					"active": active, "in_progress": inProgress, "ready": ready, "agent_review": agentReview, "review": review,
 				})
 			}
 			fmt.Printf("Sherpa · %s (%s) · you are %s\n\n", a.store.Config.Name, a.store.Config.Key, a.actor)
@@ -507,6 +613,7 @@ func (a *app) contextCmd() *cobra.Command {
 			}
 			section("In progress", inProgress)
 			section("Ready", ready)
+			section("Awaiting agent review (shp review <id> --pass|--reject)", agentReview)
 			section("Awaiting review", review)
 			return nil
 		},
@@ -656,6 +763,212 @@ func (a *app) migrateCmd() *cobra.Command {
 				n++
 			}
 			fmt.Printf("Moved worklogs out of %d item bodies; worklogs are now generated from .sherpa/sessions.\n", n)
+			return nil
+		},
+	}
+}
+
+func (a *app) importCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "import", Short: "Import issues from another tracker"}
+	var source, mappingPath string
+	agency := &cobra.Command{
+		Use:   "agency --mapping <file.yaml>",
+		Short: "Import Agency issues (.agency/issues) into epics, stories and tickets",
+		Long: `Import Agency issues using a YAML mapping that places every issue in a story:
+
+  key: APP
+  epics:
+    - title: "Platform"
+      goal: "…"
+      stories:
+        - title: "Auth"
+          description: "…"
+          issues: [1, 2, 3]
+
+Ticket numbers match issue numbers (APP-30 → T-0030). todo becomes ready when
+all its dependencies are done, otherwise backlog. Comments become worklog
+entries; the original files are archived in .sherpa/imports/agency/.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.load(); err != nil {
+				return err
+			}
+			data, err := os.ReadFile(mappingPath)
+			if err != nil {
+				return err
+			}
+			var m importer.Mapping
+			if err := yaml.Unmarshal(data, &m); err != nil {
+				return fmt.Errorf("mapping: %w", err)
+			}
+			if source == "" {
+				source = filepath.Join(a.store.Root, ".agency", "issues")
+			}
+			res, err := importer.Agency(a.store, source, &m)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(a.store.Dir, "imports", "agency", "mapping.yaml"), data, 0o644); err != nil {
+				return err
+			}
+			if a.json {
+				return a.emit(res)
+			}
+			fmt.Printf("Imported %d epics, %d stories, %d tickets (%d journal events)\n", res.Epics, res.Stories, res.Tickets, res.Events)
+			for _, st := range model.Statuses {
+				if n := res.ByStatus[st]; n > 0 {
+					fmt.Printf("  %s %-12s %d\n", st.Glyph(), st, n)
+				}
+			}
+			return nil
+		},
+	}
+	agency.Flags().StringVar(&mappingPath, "mapping", "", "YAML mapping of epics/stories to issue numbers (required)")
+	agency.Flags().StringVar(&source, "source", "", "issues directory (default .agency/issues)")
+	_ = agency.MarkFlagRequired("mapping")
+	cmd.AddCommand(agency)
+	return cmd
+}
+
+// linkWork attaches the PR for the current branch and the commits that name
+// the item, when they can be found. Missing gh or no PR is not an error.
+func (a *app) linkWork(it *model.Item) {
+	if it.Links == nil {
+		it.Links = &model.Links{}
+	}
+	l := it.Links
+	if links.Available() {
+		ref := l.PR // refresh a known PR, else look one up for this branch
+		if ref != "" {
+			_ = links.View(a.store.CodeRoot, ref, l)
+		} else if br := gitinfo.Branch(a.store.CodeRoot); br != "" {
+			_ = links.ForBranch(a.store.CodeRoot, l)
+		}
+	}
+	if len(l.Commits) == 0 {
+		l.Commits = links.TrailerCommits(a.store.CodeRoot, it.ID)
+	}
+	if l.Empty() {
+		it.Links = nil
+	}
+}
+
+// reviewWarnings lists what a reviewer should know is missing. They are
+// warnings only: submit never blocks on them.
+func reviewWarnings(it *model.Item) []string {
+	var w []string
+	if it.Links == nil || it.Links.PR == "" {
+		w = append(w, "⚠ no PR linked: open one with `gh pr create` (Sherpa links it), or run `shp sync` after it exists")
+	}
+	if r, t := it.CheckCounts(); r < t {
+		var open []string
+		for i, c := range it.Checks {
+			if !c.Resolved() {
+				open = append(open, fmt.Sprintf("%d %s", i+1, c.Text))
+			}
+		}
+		w = append(w, fmt.Sprintf("⚠ checks %d/%d: unresolved %s", r, t, strings.Join(open, "; ")))
+	}
+	for _, m := range it.Measures {
+		if met, known := m.Met(); known && !met {
+			w = append(w, fmt.Sprintf("⚠ measure %q at %s, target %s", m.Name, m.Current, m.Target))
+		}
+	}
+	if it.Now == "" {
+		w = append(w, "⚠ no Now line: `shp now \"…\"` tells reviewers where things stand")
+	}
+	return w
+}
+
+func (a *app) syncCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sync [id...]",
+		Short: "Link PRs and commits to tickets and refresh PR state (needs gh)",
+		Long: `For each ticket (default: every ticket in progress, review or done):
+refresh its linked PR, or find the PR that delivered it by branch name or
+title (T-0030, or an imported key like app-30), plus commits whose message
+has "Ticket: <id>".`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.load(); err != nil {
+				return err
+			}
+			if !links.Available() {
+				return errors.New("shp sync needs the GitHub CLI (gh)")
+			}
+			var items []*model.Item
+			if len(args) > 0 {
+				for _, id := range args {
+					it, err := a.store.Get(id)
+					if err != nil {
+						return err
+					}
+					items = append(items, it)
+				}
+			} else {
+				all, err := a.store.All()
+				if err != nil {
+					return err
+				}
+				for _, it := range all {
+					if it.Kind == model.Ticket && (it.Status == model.InProgress || it.Status == model.AgentReview || it.Status == model.Review || it.Status == model.Done) {
+						items = append(items, it)
+					}
+				}
+			}
+			prs, err := links.List(a.store.CodeRoot)
+			if err != nil {
+				return err
+			}
+			linked, refreshed := 0, 0
+			for _, it := range items {
+				before, _ := json.Marshal(it.Links)
+				l := it.Links
+				if l == nil {
+					l = &model.Links{}
+				}
+				isNew := l.PR == ""
+				switch {
+				case !isNew:
+					_ = links.View(a.store.CodeRoot, l.PR, l)
+				default:
+					if all := links.MatchAll(prs, links.Keys(it)); len(all) > 0 {
+						_ = links.ApplyMatch(a.store.CodeRoot, all[0], l)
+						for _, p := range all[1:] {
+							if !slices.Contains(l.Related, p.URL) {
+								l.Related = append(l.Related, p.URL)
+							}
+						}
+					}
+				}
+				for _, c := range links.TrailerCommits(a.store.CodeRoot, it.ID) {
+					if !slices.ContainsFunc(l.Commits, func(x model.Commit) bool { return x.SHA == c.SHA }) {
+						l.Commits = append(l.Commits, c)
+					}
+				}
+				if l.Empty() {
+					continue
+				}
+				it.Links = l
+				after, _ := json.Marshal(it.Links)
+				if string(before) == string(after) {
+					continue
+				}
+				if err := a.store.Write(it); err != nil { // keep Updated: sync isn't an edit
+					return err
+				}
+				if isNew && l.PR != "" {
+					linked++
+					_ = a.record(journal.Event{Item: it.ID, Type: "link", Message: fmt.Sprintf("linked PR #%d (%s)", l.PRNumber, l.PRState), Detail: []string{l.PR}})
+					if !a.json {
+						fmt.Printf("⇡ %s ← PR #%d %s\n", it.ID, l.PRNumber, l.PRState)
+					}
+				} else {
+					refreshed++
+				}
+			}
+			if a.json {
+				return a.emit(map[string]int{"linked": linked, "refreshed": refreshed, "checked": len(items)})
+			}
+			fmt.Printf("Checked %d tickets: %d PRs newly linked, %d refreshed\n", len(items), linked, refreshed)
 			return nil
 		},
 	}

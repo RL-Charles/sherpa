@@ -100,15 +100,16 @@ func ParseID(id string) (string, Kind, int, error) {
 type Status string
 
 const (
-	Backlog    Status = "backlog"
-	Ready      Status = "ready"
-	InProgress Status = "in_progress"
-	Review     Status = "review"
-	Blocked    Status = "blocked"
-	Done       Status = "done"
+	Backlog     Status = "backlog"
+	Ready       Status = "ready"
+	InProgress  Status = "in_progress"
+	AgentReview Status = "agent_review" // submitted by an agent; a human or another agent reviews it first
+	Review      Status = "review"       // awaiting human review
+	Blocked     Status = "blocked"
+	Done        Status = "done"
 )
 
-var Statuses = []Status{Backlog, Ready, InProgress, Review, Blocked, Done}
+var Statuses = []Status{Backlog, Ready, InProgress, AgentReview, Review, Blocked, Done}
 
 func ParseStatus(s string) (Status, error) {
 	norm := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", "_")
@@ -140,6 +141,8 @@ func (s Status) Glyph() string {
 		return "◎"
 	case InProgress:
 		return "◐"
+	case AgentReview:
+		return "◒"
 	case Review:
 		return "◑"
 	case Blocked:
@@ -161,8 +164,13 @@ type Item struct {
 	Assignee string    `yaml:"assignee,omitempty" json:"assignee,omitempty"`
 	Priority string    `yaml:"priority,omitempty" json:"priority,omitempty"`
 	Labels   []string  `yaml:"labels,omitempty" json:"labels,omitempty"`
+	Depends  []string  `yaml:"depends,omitempty" json:"depends,omitempty"`
+	Now      string    `yaml:"now,omitempty" json:"now,omitempty"` // one-line current state
 	Created  time.Time `yaml:"created" json:"created"`
 	Updated  time.Time `yaml:"updated" json:"updated"`
+	Checks   []Check   `yaml:"checks,omitempty" json:"checks,omitempty"`
+	Measures []Measure `yaml:"measures,omitempty" json:"measures,omitempty"`
+	Links    *Links    `yaml:"links,omitempty" json:"links,omitempty"`
 	Body     string    `yaml:"-" json:"body,omitempty"`
 }
 
@@ -175,9 +183,8 @@ func DefaultBody(k Kind, description string) string {
 	switch k {
 	case Epic:
 		return "## Goal\n\n" + description + "\n"
-	case Story:
-		return "## Description\n\n" + description + "\n\n## Acceptance criteria\n\n- [ ] \n"
 	default:
-		return "## Description\n\n" + description + "\n\n## Acceptance criteria\n\n- [ ] \n"
+		// Acceptance criteria are structured checks (shp check), not body text.
+		return "## Description\n\n" + description + "\n"
 	}
 }

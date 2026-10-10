@@ -8,7 +8,7 @@ type keyMap struct {
 	PageUp, PageDown       key.Binding
 	ExpandAll, CollapseAll key.Binding
 	Focus, Reload, Edit    key.Binding
-	Worklog                key.Binding
+	Worklog, Status, Board key.Binding
 	Help, Quit             key.Binding
 }
 
@@ -29,20 +29,22 @@ func defaultKeys() keyMap {
 		Reload:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 		Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 		Worklog:     key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "all worklog sessions")),
+		Status:      key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "set status")),
+		Board:       key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "board/tree")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Toggle, k.Edit, k.Focus, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Toggle, k.Edit, k.Status, k.Board, k.Focus, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right, k.Toggle},
 		{k.Top, k.Bottom, k.PageUp, k.PageDown},
-		{k.ExpandAll, k.CollapseAll, k.Focus, k.Reload, k.Edit, k.Worklog},
+		{k.ExpandAll, k.CollapseAll, k.Focus, k.Reload, k.Edit, k.Status, k.Board, k.Worklog},
 		{k.Help, k.Quit},
 	}
 }
@@ -54,6 +56,7 @@ func (p previewKeys) ShortHelp() []key.Binding {
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("j"), key.WithHelp("↑↓/jk", "scroll")),
 		key.NewBinding(key.WithKeys("e"), key.WithHelp("e/enter", "edit")),
+		p.k.Status,
 		p.k.Worklog,
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc/tab", "back to tree")),
 		p.k.Help, p.k.Quit,

@@ -2,6 +2,9 @@
 package store
 
 import (
+	"cmp"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/RL-Charles/sherpa/internal/gitinfo"
 	"github.com/RL-Charles/sherpa/internal/model"
 )
 
@@ -27,21 +31,52 @@ type Config struct {
 }
 
 type Store struct {
-	Root   string // repository root (parent of .sherpa)
-	Dir    string // absolute path to .sherpa
-	Config Config
+	Root     string // directory holding .sherpa
+	Dir      string // absolute path to .sherpa
+	CodeRoot string // checkout whose code is being worked on; git stats run here
+	Config   Config
 }
 
-// Find walks up from start looking for a .sherpa directory.
+// Find locates the .sherpa directory for work happening in start:
+//
+//	$SHERPA_DIR                 explicit path to a .sherpa directory
+//	inside a linked git worktree the main checkout's .sherpa, so every agent
+//	                            worktree shares one live board
+//	otherwise                   the nearest .sherpa walking up from start
+//
+// CodeRoot is always the checkout containing start, so diff stats measure
+// the code actually being changed.
 func Find(start string) (*Store, error) {
 	dir, err := filepath.Abs(start)
 	if err != nil {
 		return nil, err
 	}
+	top, main := gitinfo.Worktree(dir)
+	withCode := func(s *Store, err error) (*Store, error) {
+		if err == nil {
+			s.CodeRoot = cmp.Or(top, s.Root)
+		}
+		return s, err
+	}
+	if env := os.Getenv("SHERPA_DIR"); env != "" {
+		abs, err := filepath.Abs(env)
+		if err != nil {
+			return nil, err
+		}
+		if filepath.Base(abs) != DirName {
+			abs = filepath.Join(abs, DirName)
+		}
+		return withCode(open(filepath.Dir(abs)))
+	}
+	if main != "" && main != top {
+		if fi, err := os.Stat(filepath.Join(main, DirName)); err == nil && fi.IsDir() {
+			return withCode(open(main))
+		}
+	}
 	for {
 		candidate := filepath.Join(dir, DirName)
 		if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
-			return open(dir)
+			return withCode(open(dir))
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -52,7 +87,7 @@ func Find(start string) (*Store, error) {
 }
 
 func open(root string) (*Store, error) {
-	s := &Store{Root: root, Dir: filepath.Join(root, DirName)}
+	s := &Store{Root: root, Dir: filepath.Join(root, DirName), CodeRoot: root}
 	data, err := os.ReadFile(filepath.Join(s.Dir, "config.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -158,6 +193,11 @@ func (s *Store) All() ([]*model.Item, error) {
 // Save writes an item atomically and bumps its Updated time.
 func (s *Store) Save(it *model.Item) error {
 	it.Updated = time.Now().UTC().Truncate(time.Second)
+	return s.Write(it)
+}
+
+// Write stores an item exactly as given, keeping its timestamps (imports).
+func (s *Store) Write(it *model.Item) error {
 	data, err := Render(it)
 	if err != nil {
 		return err
@@ -277,4 +317,45 @@ func StripWorklog(body string) (string, bool) {
 	}
 	out := append(lines[:start:start], lines[end:]...)
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n", true
+}
+
+// CheckoutKey names the checkout being worked in: "main" for the checkout
+// holding .sherpa, otherwise the worktree's directory name plus a short hash
+// of its path. The active ticket is tracked per checkout, so an agent's own
+// shp commands and its tool hooks always agree, whatever their actor name.
+func (s *Store) CheckoutKey() string {
+	if s.CodeRoot == "" || s.CodeRoot == s.Root {
+		return "main"
+	}
+	sum := sha1.Sum([]byte(s.CodeRoot))
+	return keySafe.ReplaceAllString(filepath.Base(s.CodeRoot), "-") + "-" + hex.EncodeToString(sum[:3])
+}
+
+var keySafe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+func (s *Store) activePath() string {
+	return filepath.Join(s.Dir, ".local", "active", s.CheckoutKey())
+}
+
+// Active returns the ticket claimed in this checkout, or "" if none.
+func (s *Store) Active() (string, error) {
+	data, err := os.ReadFile(s.activePath())
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	return strings.TrimSpace(string(data)), err
+}
+
+// SetActive records (or with "" clears) the ticket claimed in this checkout.
+func (s *Store) SetActive(id string) error {
+	if id == "" {
+		if err := os.Remove(s.activePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(s.activePath()), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(s.activePath(), []byte(id+"\n"), 0o644)
 }

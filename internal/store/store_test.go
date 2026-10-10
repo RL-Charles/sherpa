@@ -1,6 +1,9 @@
 package store
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/RL-Charles/sherpa/internal/model"
@@ -66,5 +69,51 @@ func TestStripWorklog(t *testing.T) {
 	}
 	if got, _ := StripWorklog("## Goal\n\ng\n\n## Worklog\n- a\n"); got != "## Goal\n\ng\n" {
 		t.Fatalf("trailing worklog: got %q", got)
+	}
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func TestFindSharesMainCheckoutFromWorktree(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q")
+	if _, err := Init(repo, "WT", "wt"); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-qm", "init")
+	wt := filepath.Join(repo, ".claude", "worktrees", "agent-1")
+	gitRun(t, repo, "worktree", "add", "-q", "-b", "agent/x", wt)
+
+	s, err := Find(filepath.Join(wt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainDir, _ := filepath.EvalSymlinks(filepath.Join(repo, DirName))
+	gotDir, _ := filepath.EvalSymlinks(s.Dir)
+	gotCode, _ := filepath.EvalSymlinks(s.CodeRoot)
+	wantCode, _ := filepath.EvalSymlinks(wt)
+	if gotDir != mainDir {
+		t.Fatalf("worktree should use main checkout's .sherpa: got %s want %s", gotDir, mainDir)
+	}
+	if gotCode != wantCode {
+		t.Fatalf("CodeRoot should be the worktree: got %s want %s", gotCode, wantCode)
+	}
+
+	t.Setenv("SHERPA_DIR", filepath.Join(wt, DirName)) // explicit override wins
+	s, err = Find(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := filepath.EvalSymlinks(s.Dir); got != func() string { p, _ := filepath.EvalSymlinks(filepath.Join(wt, DirName)); return p }() {
+		t.Fatalf("SHERPA_DIR ignored: %s", s.Dir)
 	}
 }

@@ -15,6 +15,12 @@ type row struct {
 	item    *model.Item
 	depth   int
 	hasKids bool
+
+	// Board section rows have no item.
+	group model.Status
+	count int
+
+	spin string // spinner frame while an agent works on the item
 }
 
 // flatten turns the item hierarchy into visible rows, descending only into
@@ -62,8 +68,12 @@ func renderRow(r row, expanded, selected, focused bool, width int) string {
 	}
 	indent := strings.Repeat("  ", r.depth)
 	it := r.item
+	glyph, styled := it.Status.Glyph(), render.StatusStyle(it.Status).Render(it.Status.Glyph())
+	if r.spin != "" {
+		glyph, styled = r.spin, workStyle.Render(r.spin)
+	}
 	if selected {
-		plain := indent + arrow + it.Status.Glyph() + " " + it.ID + " " + it.Title
+		plain := indent + arrow + glyph + " " + it.ID + " " + it.Title
 		plain = ansi.Truncate(plain, width, "…")
 		plain += strings.Repeat(" ", max(0, width-ansi.StringWidth(plain)))
 		if focused {
@@ -76,8 +86,27 @@ func renderRow(r row, expanded, selected, focused bool, width int) string {
 		title = epicStyle.Render(title)
 	}
 	line := faint.Render(indent+arrow) +
-		render.StatusStyle(it.Status).Render(it.Status.Glyph()) + " " +
-		idStyle.Render(it.ID) + " " + title
+		styled + " " +
+		idStyle.Render(it.ID) + " " + prMark(it) + title
 	line = ansi.Truncate(line, width, "…")
 	return line + strings.Repeat(" ", max(0, width-ansi.StringWidth(line)))
+}
+
+var prStyles = map[string]lipgloss.Style{
+	"merged": lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
+	"open":   lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
+	"draft":  lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+	"closed": lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+}
+
+// prMark is a small ⇡ before the title when a PR is linked, coloured by state.
+func prMark(it *model.Item) string {
+	if it.Links == nil || it.Links.PRNumber == 0 {
+		return ""
+	}
+	st, ok := prStyles[it.Links.PRState]
+	if !ok {
+		st = faint
+	}
+	return st.Render("⇡") + " "
 }

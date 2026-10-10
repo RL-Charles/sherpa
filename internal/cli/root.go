@@ -14,6 +14,7 @@ import (
 
 	"github.com/RL-Charles/sherpa/internal/gitinfo"
 	"github.com/RL-Charles/sherpa/internal/journal"
+	"github.com/RL-Charles/sherpa/internal/live"
 	"github.com/RL-Charles/sherpa/internal/model"
 	"github.com/RL-Charles/sherpa/internal/render"
 	"github.com/RL-Charles/sherpa/internal/store"
@@ -33,9 +34,9 @@ type app struct {
 func Execute() error {
 	a := &app{}
 	root := &cobra.Command{
-		Use:           "shp",
+		Use:           CommandName(os.Args[0]),
 		Short:         "Sherpa — tickets and progress tracking for humans and agents",
-		Long:          "Sherpa — tickets and progress tracking for humans and agents.\n\nRun with no arguments to open the TUI.",
+		Long:          "Sherpa — tickets and progress tracking for humans and agents.\n\nRun with no arguments to open the TUI. The same program is installed as shp (short, what agents use) and sherpa.",
 		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -61,17 +62,29 @@ func Execute() error {
 		a.logCmd(),
 		a.submitCmd(),
 		a.doneCmd(),
+		a.reviewCmd(),
 		a.contextCmd(),
 		a.activityCmd(),
 		a.editCmd(),
 		a.migrateCmd(),
+		a.importCmd(),
+		a.hookCmd(),
+		a.hooksCmd(),
+		a.nowCmd(),
+		a.checkCmd(),
+		a.checksCmd(),
+		a.measureCmd(),
+		a.visualCmd(),
+		a.dependsCmd(),
+		a.syncCmd(),
+		a.backfillCmd(),
 	)
 	err := root.Execute()
 	if err != nil {
 		if a.json {
 			_ = json.NewEncoder(os.Stderr).Encode(map[string]string{"error": err.Error()})
 		} else {
-			fmt.Fprintln(os.Stderr, "shp:", err)
+			fmt.Fprintln(os.Stderr, CommandName(os.Args[0])+":", err)
 		}
 	}
 	return err
@@ -90,12 +103,25 @@ func (a *app) load() error {
 	a.store = s
 	a.actor = workflow.CurrentActor()
 	a.session = journal.Session(a.actor.String())
+	if os.Getenv("SHERPA_SESSION") == "" && s.CodeRoot != s.Root {
+		// Parallel agents in different worktrees each get their own session,
+		// so they never overwrite one another's active ticket.
+		a.session += "-" + filepath.Base(s.CodeRoot)
+	}
 	return nil
 }
 
 func (a *app) record(e journal.Event) error {
 	e.Actor = a.actor.String()
 	e.Session = a.session
+	if a.actor.Kind == workflow.Agent { // the TUI's live "working" indicator
+		switch e.Type {
+		case "claim", "log":
+			_ = live.Touch(a.store, a.actor.Name, e.Item)
+		case "submit":
+			_ = live.Clear(a.store)
+		}
+	}
 	return journal.Append(a.store.Dir, e)
 }
 
@@ -105,32 +131,10 @@ func (a *app) emit(v any) error {
 	return enc.Encode(v)
 }
 
-// Active ticket per session lives in .sherpa/.local/active/<session> (gitignored).
-func (a *app) activePath() string {
-	return filepath.Join(a.store.Dir, ".local", "active", a.session)
-}
+// The active ticket is tracked per checkout (main or worktree) by the store.
+func (a *app) activeID() (string, error) { return a.store.Active() }
 
-func (a *app) activeID() (string, error) {
-	data, err := os.ReadFile(a.activePath())
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	return strings.TrimSpace(string(data)), err
-}
-
-func (a *app) setActive(id string) error {
-	if id == "" {
-		err := os.Remove(a.activePath())
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(a.activePath()), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(a.activePath(), []byte(id+"\n"), 0o644)
-}
+func (a *app) setActive(id string) error { return a.store.SetActive(id) }
 
 // resolve returns the item named by args[0], or the session's active ticket.
 func (a *app) resolve(args []string) (*model.Item, error) {
@@ -164,7 +168,7 @@ func (a *app) transition(it *model.Item, to model.Status, note string) error {
 		return err
 	}
 	return a.record(journal.Event{Item: it.ID, Type: "status", From: string(from), To: string(to), Message: note,
-		Commit: gitinfo.Head(a.store.Root)})
+		Commit: gitinfo.Head(a.store.CodeRoot)})
 }
 
 // workSession returns the commit the item's current work session started
@@ -187,4 +191,14 @@ func (a *app) workSession(id string) (base string, files []string, err error) {
 		}
 	}
 	return base, files, nil
+}
+
+// CommandName is how Sherpa refers to itself in help and errors: "sherpa"
+// when run under that name, otherwise "shp".
+func CommandName(argv0 string) string {
+	base := strings.TrimSuffix(filepath.Base(argv0), ".exe")
+	if base == "sherpa" {
+		return "sherpa"
+	}
+	return "shp"
 }

@@ -6,14 +6,15 @@ This repo tracks its own work in `.sherpa/` using the `shp` binary.
 ## Build & test
 
 ```bash
-mise exec -- go build -o bin/shp ./cmd/shp
+mise exec -- go build -o bin/ ./cmd/...   # bin/shp and bin/sherpa (same program)
 mise exec -- go test ./...
 ```
 
 ## Layout
 
 ```
-cmd/shp/            entrypoint
+cmd/shp/            entrypoint (short name; agents and hooks use shp)
+cmd/sherpa/         same program under the product name
 internal/model/     Item, Kind, Status, IDs
 internal/store/     markdown+frontmatter persistence under .sherpa/
 internal/workflow/  actor detection, transition rules
@@ -34,7 +35,10 @@ internal/tui/       Bubble Tea app: tree, live-preview editor (blocks.go, editor
    - decision: `./bin/shp log -k decision "Line splitter, not goldmark" -d "goldmark lists have no positions"`
    - verify:   `./bin/shp log -k verify "go test ./... passes"`
    - blocker:  `./bin/shp log -k blocker "Need API key for MCP smoke test"`
-4. Finish with a PR-style submit: `./bin/shp submit -m "what changed" --verified "how it was checked" [--followup "gap"]`.
-5. Never mark work done — only a human runs `shp done`.
-6. Update a description with `./bin/shp edit <id> --stdin`. Never write a worklog into ticket markdown; it is generated from `.sherpa/sessions/`.
-7. Commit messages include a `Ticket: T-xxxx` line.
+4. Keep tickets readable: `./bin/shp now "one-line state"`, `./bin/shp check <n> -e <evidence>`, `./bin/shp measure "<name>" <value> --target <goal>`; stories/epics get a Visual (`./bin/shp visual <id> --stdin`).
+5. Open PRs with `gh pr create` (Sherpa links them; `./bin/shp sync` for others).
+6. Finish with a PR-style submit: `./bin/shp submit -m "what changed" --verified "how it was checked" [--followup "gap"]` (warns about missing PR/checks). Agent submits land in **agent review**.
+   - Asked to review agent work? `./bin/shp review <T-id> --pass -m "what you checked"` sends it to human review; `--reject -m "what to fix"` sends it back to in progress.
+7. Never mark work done on your own. Only when the human explicitly tells you to close specific in-review tickets: `./bin/shp done <T-id> --approved-by <their name> -m "why"`.
+8. Update a description with `./bin/shp edit <id> --stdin`. Never write a worklog into ticket markdown; it is generated from `.sherpa/sessions/`.
+9. Commit messages include a `Ticket: T-xxxx` line.

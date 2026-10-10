@@ -30,6 +30,9 @@ type Event struct {
 	Verified  string   `json:"verified,omitempty"`
 	Followups []string `json:"followups,omitempty"`
 
+	// Status to done only: the human who approved an agent closing the item.
+	ApprovedBy string `json:"approved_by,omitempty"`
+
 	// Git context when the event was recorded. Commit is HEAD (short sha);
 	// Added/Removed are line counts for Files relative to the commit the
 	// work session started from, including uncommitted changes.

@@ -6,6 +6,7 @@ package worklog
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,7 +23,8 @@ type Session struct {
 	Base, Head     string // commit the session started from / last seen
 	Added, Removed int    // totals recorded at submit
 	Entries        []journal.Event
-	Open           bool // claimed and not yet submitted or done
+	Touched        []string // files recorded by agent edit hooks, in first-touch order
+	Open           bool     // claimed and not yet submitted or done
 }
 
 // Build groups one item's events (oldest first) into sessions.
@@ -43,6 +45,14 @@ func Build(events []journal.Event) []Session {
 		if e.Type == "migrate" { // data-format upgrades are not work
 			continue
 		}
+		if e.Type == "touch" { // edit hooks: summarised per session, not listed
+			for _, f := range e.Files {
+				if !slices.Contains(cur.Touched, f) {
+					cur.Touched = append(cur.Touched, f)
+				}
+			}
+			continue
+		}
 		if e.Type == "claim" {
 			flush()
 			n++
@@ -57,7 +67,7 @@ func Build(events []journal.Event) []Session {
 		if e.Commit != "" {
 			cur.Head = e.Commit
 		}
-		if e.Type == "submit" || e.Type == "status" && (e.To == "review" || e.To == "done") {
+		if e.Type == "submit" || e.Type == "status" && (e.To == "review" || e.To == "agent_review" || e.To == "done") {
 			cur.Open = false
 			if e.Type == "submit" {
 				cur.Added, cur.Removed = e.Added, e.Removed
@@ -104,8 +114,19 @@ func Describe(e journal.Event) (icon, color, headline string, detail []string) {
 		return "▶", "cyan", h, detail
 	case "edit":
 		return "✐", "faint", "edited description", nil
+	case "check":
+		return "☑", "green", e.Message, detail
+	case "measure":
+		return "▤", "cyan", e.Message, detail
+	case "link":
+		return "⇡", "blue", e.Message, detail
+	case "touch":
+		return "◦", "faint", "edited " + strings.Join(e.Files, ", "), nil
 	case "submit":
 		headline = "submitted for review"
+		if e.To == "agent_review" {
+			headline = "submitted for agent review"
+		}
 		if e.Message != "" {
 			detail = append([]string{e.Message}, detail...)
 		}
@@ -115,15 +136,35 @@ func Describe(e journal.Event) (icon, color, headline string, detail []string) {
 		for _, f := range e.Followups {
 			detail = append(detail, "→ follow-up: "+f)
 		}
+		if e.To == "agent_review" {
+			return "◒", "cyan", headline, detail
+		}
 		return "◑", "magenta", headline, detail
+	case "review": // a verdict on work in agent review
+		if e.Message != "" {
+			detail = append([]string{e.Message}, detail...)
+		}
+		who := e.Actor
+		if _, name, ok := strings.Cut(who, ":"); ok {
+			who = name
+		}
+		if e.Kind == "reject" {
+			return "↩", "red", "changes requested by " + who + " · back in progress", detail
+		}
+		return "✔", "green", "agent review passed by " + who + " · ready for human review", detail
 	case "status":
 		if e.Message != "" {
 			detail = append([]string{e.Message}, detail...)
 		}
 		switch e.To {
+		case "agent_review":
+			return "◒", "cyan", "moved to agent review", detail
 		case "review":
 			return "◑", "magenta", "submitted for review", detail
 		case "done":
+			if e.ApprovedBy != "" {
+				return "●", "green", "approved by " + e.ApprovedBy + " · done", detail
+			}
 			return "●", "green", "approved · done", detail
 		case "blocked":
 			return "⛔", "red", "blocked", detail
@@ -223,7 +264,20 @@ func Render(sessions []Session, width int, expandAll bool) []string {
 		if !expanded {
 			continue
 		}
+		folded := 0
+		flush := func() {
+			if folded > 0 {
+				out = append(out, strings.Repeat(" ", indent+2)+faint.Render(fmt.Sprintf("… %d progress %s · w shows all", folded, map[bool]string{true: "entry", false: "entries"}[folded == 1])))
+				folded = 0
+			}
+		}
+		highlights := !expandAll && len(s.Entries) > 6
 		for _, e := range s.Entries {
+			if highlights && routine(e) {
+				folded++
+				continue
+			}
+			flush()
 			icon, color, headline, detail := Describe(e)
 			who := ""
 			if actorName(e.Actor) != actorName(s.Actor) {
@@ -248,6 +302,17 @@ func Render(sessions []Session, width int, expandAll bool) []string {
 					line += "  " + st
 				}
 				out = append(out, strings.Repeat(" ", indent+2)+line)
+			}
+		}
+		flush()
+		if len(s.Touched) > 0 {
+			line := "    " + faint.Render("files touched: ")
+			for k, l := range wrap(strings.Join(s.Touched, " · "), textW) {
+				if k == 0 {
+					out = append(out, line+faint.Render(l))
+				} else {
+					out = append(out, strings.Repeat(" ", 19)+faint.Render(l))
+				}
 			}
 		}
 		out = append(out, "")
@@ -303,4 +368,28 @@ func when(start, end time.Time) string {
 
 func wrap(s string, w int) []string {
 	return strings.Split(ansi.Wordwrap(s, w, ""), "\n")
+}
+
+// routine entries fold away in highlight view: plain progress notes and edits.
+// Decisions, verifications, blockers, checks, links, status changes and
+// submits always show.
+func routine(e journal.Event) bool {
+	switch e.Type {
+	case "log":
+		return e.Kind == "" || e.Kind == journal.KindProgress
+	case "edit", "create":
+		return true
+	}
+	return false
+}
+
+// LastReview returns the most recent submit (or move to review) of an item.
+func LastReview(events []journal.Event) (journal.Event, bool) {
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.Type == "submit" || (e.Type == "status" && e.To == "review") {
+			return e, true
+		}
+	}
+	return journal.Event{}, false
 }

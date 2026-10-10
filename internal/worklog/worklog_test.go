@@ -73,3 +73,18 @@ func TestOpenSession(t *testing.T) {
 		t.Fatalf("open session should be marked:\n%s", text)
 	}
 }
+
+func TestTouchedFilesSummarised(t *testing.T) {
+	ss := Build([]journal.Event{
+		{TS: at(0), Actor: "agent:claude", Type: "claim"},
+		{TS: at(1), Actor: "agent:claude", Type: "touch", Files: []string{"a.go"}},
+		{TS: at(2), Actor: "agent:claude", Type: "touch", Files: []string{"b.go", "a.go"}},
+		{TS: at(3), Actor: "agent:claude", Type: "log", Message: "did it"},
+	})
+	if len(ss) != 1 || len(ss[0].Entries) != 2 || strings.Join(ss[0].Touched, ",") != "a.go,b.go" {
+		t.Fatalf("touch events should be summarised, not listed: %+v", ss)
+	}
+	if text := ansi.Strip(strings.Join(Render(ss, 80, false), "\n")); !strings.Contains(text, "files touched: a.go · b.go") {
+		t.Fatalf("missing touched line:\n%s", text)
+	}
+}

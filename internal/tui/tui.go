@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/RL-Charles/sherpa/internal/journal"
+	"github.com/RL-Charles/sherpa/internal/live"
 	"github.com/RL-Charles/sherpa/internal/model"
 	"github.com/RL-Charles/sherpa/internal/render"
 	"github.com/RL-Charles/sherpa/internal/store"
@@ -43,7 +44,8 @@ type Model struct {
 	events    []journal.Event
 	expandLog bool // show every worklog session, not just the latest
 	rows      []row
-	expanded  map[string]bool
+	expanded  map[string]bool // tree items by ID, board sections by groupKey
+	board     bool            // left pane shows the status board instead of the tree
 	cursor    int
 	offset    int
 
@@ -58,6 +60,11 @@ type Model struct {
 	conflict  bool
 	quitArmed bool
 	flash     string
+	pick      *picker // status picker, open while non-nil
+
+	pulses   []live.Pulse // agents working right now
+	spinning bool         // the spinner timer is running
+	frame    int
 
 	focus    focus
 	width    int
@@ -86,6 +93,9 @@ func New(s *store.Store, style string) *Model {
 			m.expanded[it.ID] = true
 		}
 	}
+	for _, st := range boardOrder {
+		m.expanded[groupKey(st)] = st != model.Done
+	}
 	m.rebuild("")
 	return m
 }
@@ -100,7 +110,7 @@ func Run(s *store.Store) error {
 	return err
 }
 
-func (m *Model) Init() tea.Cmd { return tick() }
+func (m *Model) Init() tea.Cmd { return tea.Batch(tick(), m.refreshPulses()) }
 
 func tick() tea.Cmd {
 	return tea.Tick(reloadEvery, func(time.Time) tea.Msg { return tickMsg{} })
@@ -127,10 +137,14 @@ func (m *Model) selected() *model.Item {
 
 // rebuild recomputes visible rows, keeping the cursor on keepID if it is still visible.
 func (m *Model) rebuild(keepID string) {
-	m.rows = flatten(m.items, m.expanded)
+	if m.board {
+		m.rows = flattenBoard(m.items, m.expanded)
+	} else {
+		m.rows = flatten(m.items, m.expanded)
+	}
 	if keepID != "" {
 		for i, r := range m.rows {
-			if r.item.ID == keepID {
+			if r.key() == keepID {
 				m.cursor = i
 				break
 			}
@@ -159,9 +173,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.ed.editing { // never swap the document out from under the cursor
 			m.reloadKeep()
 		}
-		return m, tick()
+		return m, tea.Batch(tick(), m.refreshPulses())
+
+	case spinMsg:
+		return m, m.onSpin()
 
 	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			m.click(msg.X, msg.Y)
+			return m, nil
+		}
 		if msg.X >= m.treeWidth() {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp:
@@ -199,6 +220,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		}
+		if m.pick != nil {
+			m.pickKey(msg)
+			return m, nil
+		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -224,6 +249,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Worklog):
 			m.expandLog = !m.expandLog
 			m.refreshPreview()
+			return m, nil
+		case key.Matches(msg, m.keys.Status):
+			m.openPicker()
+			return m, nil
+		case key.Matches(msg, m.keys.Board):
+			m.toggleBoard()
 			return m, nil
 		}
 		if m.focus == focusPreview {
@@ -370,37 +401,50 @@ func (m *Model) treeKey(msg tea.KeyMsg) {
 		m.move(len(m.rows))
 	case key.Matches(msg, m.keys.Toggle):
 		if r, ok := m.current(); ok && r.hasKids {
-			m.expanded[r.item.ID] = !m.expanded[r.item.ID]
-			m.rebuild(r.item.ID)
+			m.expanded[r.key()] = !m.expanded[r.key()]
+			m.rebuild(r.key())
 		}
 	case key.Matches(msg, m.keys.Right):
 		if r, ok := m.current(); ok && r.hasKids {
-			if !m.expanded[r.item.ID] {
-				m.expanded[r.item.ID] = true
-				m.rebuild(r.item.ID)
+			if !m.expanded[r.key()] {
+				m.expanded[r.key()] = true
+				m.rebuild(r.key())
 			} else {
 				m.move(1)
 			}
 		}
 	case key.Matches(msg, m.keys.Left):
 		if r, ok := m.current(); ok {
-			if r.hasKids && m.expanded[r.item.ID] {
-				m.expanded[r.item.ID] = false
-				m.rebuild(r.item.ID)
-			} else if r.item.Parent != "" {
-				m.rebuild(r.item.Parent)
+			if r.hasKids && m.expanded[r.key()] {
+				m.expanded[r.key()] = false
+				m.rebuild(r.key())
+			} else if p := m.parentKey(r); p != "" {
+				m.rebuild(p)
 			}
 		}
 	case key.Matches(msg, m.keys.ExpandAll):
 		keep := m.currentID()
-		for _, it := range m.items {
-			m.expanded[it.ID] = true
+		if m.board {
+			for _, st := range boardOrder {
+				m.expanded[groupKey(st)] = true
+			}
+		} else {
+			for _, it := range m.items {
+				m.expanded[it.ID] = true
+			}
 		}
 		m.rebuild(keep)
 	case key.Matches(msg, m.keys.CollapseAll):
 		keep := m.currentID()
-		m.expanded = map[string]bool{}
-		// Land on the epic that contained the cursor.
+		for k := range m.expanded { // only this view's nodes
+			if strings.HasPrefix(k, "status:") == m.board {
+				delete(m.expanded, k)
+			}
+		}
+		if r, ok := m.current(); ok && m.board {
+			keep = m.parentKey(r)
+		}
+		// Land on the epic (or board section) that contained the cursor.
 		for it := m.findItem(keep); it != nil; it = m.findItem(it.Parent) {
 			keep = it.ID
 		}
@@ -417,9 +461,21 @@ func (m *Model) current() (row, bool) {
 
 func (m *Model) currentID() string {
 	if r, ok := m.current(); ok {
-		return r.item.ID
+		return r.key()
 	}
 	return ""
+}
+
+// parentKey is the row h/left jumps to: the parent item, or the ticket's
+// section on the board. Empty for top-level rows.
+func (m *Model) parentKey(r row) string {
+	switch {
+	case r.item == nil:
+		return ""
+	case m.board:
+		return groupKey(r.item.Status)
+	}
+	return r.item.Parent
 }
 
 func (m *Model) findItem(id string) *model.Item {
@@ -473,7 +529,7 @@ func (m *Model) helpKeys() help.KeyMap {
 }
 
 func (m *Model) footerHeight() int {
-	return lipgloss.Height(m.help.View(m.helpKeys()))
+	return lipgloss.Height(m.footerView())
 }
 
 func (m *Model) bodyHeight() int {
@@ -499,6 +555,12 @@ func (m *Model) refreshPreview() {
 		return
 	}
 	it := m.selected()
+	if r, ok := m.current(); ok && it == nil { // a board section
+		m.ed.setDoc(m.groupDoc(r.group), "", "", r.key() != m.previewID)
+		m.ed.tail = nil
+		m.previewID = r.key()
+		return
+	}
 	if it == nil {
 		m.ed.setDoc("", "_Nothing here yet._\n\nCreate an epic from the shell: `shp new epic \"…\"`", "", true)
 		m.ed.tail = nil
@@ -509,7 +571,12 @@ func (m *Model) refreshPreview() {
 	if it.Parent != "" {
 		parent = m.findItem(it.Parent)
 	}
-	m.ed.setDoc(render.DocHeader(it, parent), it.Body, render.DocFooter(store.Children(m.items, it.ID)), it.ID != m.previewID)
+	header := render.DocHeader(it, parent, m.items...)
+	if e, ok := worklog.LastReview(journal.ForItem(m.events, it.ID)); ok {
+		header += render.ReviewCard(it, e)
+	}
+	m.ed.setDoc(header, it.Body,
+		render.Sections(it, m.items, store.Children(m.items, it.ID)), it.ID != m.previewID)
 	m.ed.tail = worklog.Render(worklog.Build(journal.ForItem(m.events, it.ID)), m.ed.width, m.expandLog)
 	m.previewID = it.ID
 }
@@ -535,12 +602,18 @@ func (m *Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.headerView(),
 		lipgloss.JoinHorizontal(lipgloss.Top, m.treeView(), m.previewView()),
-		m.help.View(m.helpKeys()),
+		m.footerView(),
 	)
 }
 
 func (m *Model) headerView() string {
 	left := titleStyle.Render("⛰ Sherpa") + faint.Render(" · ") + m.store.Config.Name + faint.Render(" ("+m.store.Config.Key+")")
+	if m.board {
+		left += faint.Render(" · ") + titleStyle.Render("board")
+	}
+	if w := m.workingView(); w != "" && !m.ed.editing {
+		left += faint.Render(" · ") + w
+	}
 	if m.ed.editing {
 		left += faint.Render(" · ") + editStyle.Render("editing "+m.editID)
 		if m.ed.dirty {
@@ -617,7 +690,12 @@ func (m *Model) treeView() string {
 	}
 	for i := m.offset; i < len(m.rows) && len(lines) < h; i++ {
 		r := m.rows[i]
-		lines = append(lines, renderRow(r, m.expanded[r.item.ID], i == m.cursor, m.focus == focusTree, w))
+		if r.item == nil {
+			lines = append(lines, renderGroup(r, m.expanded[r.key()], i == m.cursor, m.focus == focusTree, w))
+			continue
+		}
+		r.spin = m.spinner(r.item.ID)
+		lines = append(lines, renderRow(r, m.expanded[r.key()], i == m.cursor, m.focus == focusTree, w))
 	}
 	border := blurredBorder
 	if m.focus == focusTree {

@@ -29,12 +29,13 @@ var (
 // StatusStyle colours text by status.
 func StatusStyle(s model.Status) lipgloss.Style {
 	color := map[model.Status]string{
-		model.Backlog:    "8",
-		model.Ready:      "4",
-		model.InProgress: "3",
-		model.Review:     "5",
-		model.Blocked:    "1",
-		model.Done:       "2",
+		model.Backlog:     "8",
+		model.Ready:       "4",
+		model.InProgress:  "3",
+		model.AgentReview: "6",
+		model.Review:      "5",
+		model.Blocked:     "1",
+		model.Done:        "2",
 	}[s]
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 }
@@ -139,13 +140,15 @@ func Style(name string) gansi.StyleConfig {
 
 var yes = true
 
-// Document turns an item into a markdown page: header, body, children.
-func Document(it *model.Item, parent *model.Item, children []*model.Item) string {
-	return DocHeader(it, parent) + it.Body + DocFooter(children)
+// Document turns an item into a markdown page: header, body, then the
+// generated sections and children. all is every item, for rollups.
+func Document(it *model.Item, parent *model.Item, kids []*model.Item, all ...*model.Item) string {
+	return DocHeader(it, parent, all...) + it.Body + Sections(it, all, kids)
 }
 
-// DocHeader is the read-only title and metadata shown above an item's body.
-func DocHeader(it *model.Item, parent *model.Item) string {
+// DocHeader is the read-only title, metadata, badges and Now line shown
+// above an item's body.
+func DocHeader(it *model.Item, parent *model.Item, all ...*model.Item) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s · %s\n\n", it.ID, it.Title)
 	meta := []string{"`" + string(it.Kind) + "`", it.Status.Glyph() + " **" + string(it.Status) + "**"}
@@ -160,6 +163,12 @@ func DocHeader(it *model.Item, parent *model.Item) string {
 	}
 	meta = append(meta, "_updated "+it.Updated.Local().Format("2006-01-02 15:04")+"_")
 	b.WriteString(strings.Join(meta, " · ") + "\n\n")
+	if badges := Badges(it, all); badges != "" {
+		b.WriteString(badges + "\n\n")
+	}
+	if it.Now != "" {
+		b.WriteString("**Now:** " + it.Now + "\n\n")
+	}
 	if parent != nil {
 		fmt.Fprintf(&b, "> in **%s** · %s\n\n", parent.ID, parent.Title)
 	}

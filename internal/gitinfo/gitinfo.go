@@ -71,3 +71,27 @@ func DiffStat(root, base string, files []string) (added, removed int) {
 	}
 	return added, removed
 }
+
+// Worktree describes the git checkout containing dir. Top is that checkout's
+// root; Main is the main checkout's root, which differs from Top inside a
+// linked worktree (`git worktree add`). Both are empty outside git.
+func Worktree(dir string) (top, main string) {
+	top, err := git(dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", ""
+	}
+	common, err := git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil || filepath.Base(common) != ".git" {
+		return top, top // bare or unusual layout: treat as its own checkout
+	}
+	return top, filepath.Dir(common)
+}
+
+// Branch returns the checked-out branch in dir, or "" (detached or not git).
+func Branch(dir string) string {
+	b, err := git(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil || b == "HEAD" {
+		return ""
+	}
+	return b
+}

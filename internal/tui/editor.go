@@ -146,17 +146,41 @@ func (e *editor) renderMDWidth(md string, w int) []string {
 
 // renderBlock renders one block. Indented list items are dedented before
 // rendering and re-indented after so nesting survives rendering in isolation.
-func (e *editor) renderBlock(b block) []string {
-	src := e.lines[b.start:b.end]
-	if b.kind == bParagraph && isDiagram(src) {
+func (e *editor) renderBlock(b block) []string { return e.renderLines(e.lines[b.start:b.end], b.kind) }
+
+// renderStatic renders read-only markdown block by block, like the body, so
+// tables are boxed and diagrams stay preformatted.
+func (e *editor) renderStatic(md string) []string {
+	lines := strings.Split(strings.Trim(md, "\n"), "\n")
+	var out []string
+	blocks := splitBlocks(lines)
+	bi := 0
+	for i := 0; i < len(lines); {
+		if bi < len(blocks) && blocks[bi].start == i {
+			b := blocks[bi]
+			bi++
+			out = append(out, e.renderLines(lines[b.start:b.end], b.kind)...)
+			i = b.end
+			continue
+		}
+		if len(out) > 0 && out[len(out)-1] != "" {
+			out = append(out, "")
+		}
+		i++
+	}
+	return out
+}
+
+func (e *editor) renderLines(src []string, kind blockKind) []string {
+	if kind == bParagraph && isDiagram(src) {
 		// Text trees and arrow diagrams written without a code fence would be
 		// reflowed into one paragraph; show them preformatted instead.
 		return e.renderMDWidth("```text\n"+strings.Join(src, "\n")+"\n```", preWidth)
 	}
-	if b.kind == bFence {
+	if kind == bFence {
 		return e.renderMDWidth(strings.Join(src, "\n"), preWidth)
 	}
-	if b.kind == bTable {
+	if kind == bTable {
 		if out, ok := e.renderTableCached(src); ok {
 			return out
 		}
@@ -164,7 +188,7 @@ func (e *editor) renderBlock(b block) []string {
 		return e.renderMDWidth(strings.Join(src, "\n"), e.width)
 	}
 	indent := 0
-	if b.kind == bList {
+	if kind == bList {
 		indent = len(src[0]) - len(strings.TrimLeft(src[0], " "))
 	}
 	if indent == 0 {
@@ -249,7 +273,7 @@ func (e *editor) layout() (out []string, cursorLine int, srcAt []int) {
 	}
 	if e.footer != "" {
 		add(-1, "")
-		add(-1, e.renderMD(e.footer)...)
+		add(-1, e.renderStatic(e.footer)...)
 	}
 	if len(e.tail) > 0 {
 		add(-1, "")
@@ -263,18 +287,7 @@ func (e *editor) layout() (out []string, cursorLine int, srcAt []int) {
 func (e *editor) rawLine(r int) (lines []string, cur int) {
 	w := e.wrapWidth()
 	runes := []rune(strings.ReplaceAll(e.lines[r], "\t", " "))
-	type chunk struct{ from, to int }
-	var chunks []chunk
-	start, cells := 0, 0
-	for i, ch := range runes {
-		cw := runewidth.RuneWidth(ch)
-		if cells+cw > w && i > start {
-			chunks = append(chunks, chunk{start, i})
-			start, cells = i, 0
-		}
-		cells += cw
-	}
-	chunks = append(chunks, chunk{start, len(runes)})
+	chunks, cells := wrapRunes(runes, w)
 	if r == e.row && e.col == len(runes) && cells >= w {
 		chunks = append(chunks, chunk{len(runes), len(runes)}) // room for the end-of-line cursor
 	}
@@ -302,6 +315,23 @@ func (e *editor) rawLine(r int) (lines []string, cur int) {
 		lines = append(lines, gutter+text)
 	}
 	return lines, cur
+}
+
+type chunk struct{ from, to int }
+
+// wrapRunes splits runes into soft-wrapped rows at most w cells wide. cells
+// is the width of the last row.
+func wrapRunes(runes []rune, w int) (chunks []chunk, cells int) {
+	start := 0
+	for i, ch := range runes {
+		cw := runewidth.RuneWidth(ch)
+		if cells+cw > w && i > start {
+			chunks = append(chunks, chunk{start, i})
+			start, cells = i, 0
+		}
+		cells += cw
+	}
+	return append(chunks, chunk{start, len(runes)}), cells
 }
 
 // View renders the visible window.

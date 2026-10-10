@@ -1,0 +1,43 @@
+name: Bug report
+description: Something in Sherpa doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. shp init --key DEMO
+        2. shp new epic "…"
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `shp --version`
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS and terminal
+      placeholder: e.g. Arch Linux, Ghostty / macOS 15, iTerm2
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Coding agent involved (if any)
+      options: [None, Claude Code, Cursor, Codex, OpenCode, Other]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or screenshots
+      render: text

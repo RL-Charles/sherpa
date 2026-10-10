@@ -26,6 +26,30 @@ func TestAgentsCannotFinish(t *testing.T) {
 	}
 }
 
+func TestAgentsCloseWithApproval(t *testing.T) {
+	agent := Actor{Kind: Agent, Name: "claude"}
+	human := Actor{Kind: Human, Name: "charles"}
+	review := &model.Item{ID: "T-0001", Status: model.Review}
+	active := &model.Item{ID: "T-0002", Status: model.InProgress}
+
+	if err := CheckApprovedDone(agent, review, ""); err == nil {
+		t.Fatal("agent should need an approver")
+	}
+	if err := CheckApprovedDone(agent, review, "charles"); err != nil {
+		t.Fatalf("agent should close approved review work: %v", err)
+	}
+	agentReview := &model.Item{ID: "T-0003", Status: model.AgentReview}
+	if err := CheckApprovedDone(agent, agentReview, "charles"); err != nil {
+		t.Fatalf("agent should close approved agent-review work: %v", err)
+	}
+	if err := CheckApprovedDone(agent, active, "charles"); err == nil {
+		t.Fatal("agent should only close items in review")
+	}
+	if err := CheckApprovedDone(human, active, ""); err != nil {
+		t.Fatalf("human should close without approval: %v", err)
+	}
+}
+
 func TestCurrentActorEnv(t *testing.T) {
 	t.Setenv("SHERPA_ACTOR", "agent:codex")
 	if a := CurrentActor(); a.Kind != Agent || a.Name != "codex" {
