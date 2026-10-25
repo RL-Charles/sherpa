@@ -25,9 +25,18 @@ const DirName = ".sherpa"
 var ErrNotFound = errors.New("no .sherpa directory found (run `shp init`)")
 
 type Config struct {
-	Version int    `yaml:"version"`
-	Key     string `yaml:"key"`
-	Name    string `yaml:"name"`
+	Version  int      `yaml:"version"`
+	Key      string   `yaml:"key"`
+	Name     string   `yaml:"name"`
+	Reviewer Reviewer `yaml:"reviewer,omitempty"`
+}
+
+// Reviewer is the agent that reviews agent submissions: a shell command that
+// reads the review prompt on stdin, e.g. `claude -p`. With Auto it launches
+// after every agent submit; otherwise on `shp review <id> --spawn`.
+type Reviewer struct {
+	Command string `yaml:"command,omitempty"`
+	Auto    bool   `yaml:"auto,omitempty"`
 }
 
 type Store struct {

@@ -13,6 +13,7 @@ import (
 	"github.com/RL-Charles/sherpa/internal/journal"
 	"github.com/RL-Charles/sherpa/internal/model"
 	"github.com/RL-Charles/sherpa/internal/render"
+	"github.com/RL-Charles/sherpa/internal/workflow"
 )
 
 // Commands that maintain a ticket's structured sections. Each takes
@@ -59,8 +60,8 @@ func (a *app) nowCmd() *cobra.Command {
 }
 
 func (a *app) checkCmd() *cobra.Command {
-	var id, evidence, waive string
-	var undo bool
+	var id, evidence, waive, how string
+	var undo, manual bool
 	cmd := &cobra.Command{
 		Use:   "check <n>",
 		Short: "Tick acceptance check n (see `shp checks`), with evidence",
@@ -70,7 +71,13 @@ func (a *app) checkCmd() *cobra.Command {
   shp check 3 --evidence build/test/log   …or a path, URL or PR
   shp check 1 --undo                      untick
   shp check 4 --waive "covered by T-0031" resolve without doing it
-  shp check add "make check passes"       add a check`,
+  shp check 5 --manual --how "open the TUI, collapse E-001"
+                                          a human must verify it by hand
+  shp check add "make check passes"       add a check
+  shp check add --manual "looks right at 80 cols" --how "resize tmux to 80"
+
+Manual checks are signed off by humans only: agents can add them, but not
+tick or waive them.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := a.load(); err != nil {
@@ -86,6 +93,20 @@ func (a *app) checkCmd() *cobra.Command {
 			}
 			c := &it.Checks[n-1]
 			msg := "check " + args[0] + ": " + c.Text
+			if manual || how != "" {
+				c.Manual = c.Manual || manual
+				if how != "" {
+					c.How = how
+				}
+				var detail []string
+				if c.How != "" {
+					detail = []string{"how: " + c.How}
+				}
+				return a.saveAndRecord(it, journal.Event{Type: "check", Message: "manual " + msg, Detail: detail})
+			}
+			if c.Manual && !undo && a.actor.Kind == workflow.Agent {
+				return fmt.Errorf("check %d is manual: a human verifies it by hand (it waits for them in review)", n)
+			}
 			switch {
 			case undo:
 				c.Done, c.Waived, c.Evidence = false, "", ""
@@ -110,8 +131,12 @@ func (a *app) checkCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&evidence, "evidence", "e", "", "commit, PR, path or URL proving it")
 	cmd.Flags().BoolVar(&undo, "undo", false, "untick")
 	cmd.Flags().StringVar(&waive, "waive", "", "resolve without doing it, with the reason")
+	cmd.Flags().BoolVar(&manual, "manual", false, "mark it as needing a human to verify by hand")
+	cmd.Flags().StringVar(&how, "how", "", "steps a human follows to verify a manual check")
 
-	var addID string
+	var addID, addHow string
+	var addManual bool
+	var addFor int
 	add := &cobra.Command{
 		Use:   "add <criterion...>",
 		Short: "Add an acceptance check",
@@ -124,20 +149,71 @@ func (a *app) checkCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if addFor < 0 || addFor > len(it.Deliverables) {
+				if len(it.Deliverables) == 0 && addFor > 0 {
+					return fmt.Errorf("%s has no deliverables yet; add one with `shp deliverable add \"outcome\"`", it.ID)
+				}
+				return fmt.Errorf("%s has %d deliverables; --for must be 1–%d", it.ID, len(it.Deliverables), len(it.Deliverables))
+			}
 			text := strings.TrimSpace(strings.Join(args, " "))
-			it.Checks = append(it.Checks, model.Check{Text: text})
+			it.Checks = append(it.Checks, model.Check{Text: text, Manual: addManual || addHow != "", How: addHow, For: addFor})
 			if err := a.store.Save(it); err != nil {
 				return err
 			}
 			if a.json {
 				return a.emit(it)
 			}
-			fmt.Printf("%s check %d: %s\n", it.ID, len(it.Checks), text)
+			hand := ""
+			if addManual || addHow != "" {
+				hand = "✋ "
+			}
+			link := ""
+			if addFor > 0 {
+				link = fmt.Sprintf(" → deliverable %d", addFor)
+			}
+			fmt.Printf("%s check %d: %s%s%s\n", it.ID, len(it.Checks), hand, text, link)
 			return nil
 		},
 	}
 	a.itemFlag(add, &addID)
-	cmd.AddCommand(add)
+	add.Flags().BoolVar(&addManual, "manual", false, "a human must verify it by hand")
+	add.Flags().StringVar(&addHow, "how", "", "steps a human follows to verify it (implies --manual)")
+	add.Flags().IntVar(&addFor, "for", 0, "1-based deliverable this check proves")
+
+	var linkID string
+	link := &cobra.Command{
+		Use:   "link <n> <deliverable|0>",
+		Short: "Link check n to a deliverable (0 unlinks it)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.load(); err != nil {
+				return err
+			}
+			it, err := a.resolve([]string{linkID})
+			if err != nil {
+				return err
+			}
+			n, err := strconv.Atoi(args[0])
+			if err != nil || n < 1 || n > len(it.Checks) {
+				return fmt.Errorf("%s has %d checks; pick 1–%d", it.ID, len(it.Checks), len(it.Checks))
+			}
+			want, err := strconv.Atoi(args[1])
+			if err != nil || want < 0 || want > len(it.Deliverables) {
+				if len(it.Deliverables) == 0 && want > 0 {
+					return fmt.Errorf("%s has no deliverables yet; add one with `shp deliverable add \"outcome\"`", it.ID)
+				}
+				return fmt.Errorf("%s has %d deliverables; pick 0–%d", it.ID, len(it.Deliverables), len(it.Deliverables))
+			}
+			it.Checks[n-1].For = want
+			msg := fmt.Sprintf("check %d linked to deliverable %d", n, want)
+			if want == 0 {
+				msg = fmt.Sprintf("check %d unlinked", n)
+			}
+			return a.saveAndRecord(it, journal.Event{Type: "check", Message: msg})
+		},
+	}
+	a.itemFlag(link, &linkID)
+	cmd.AddCommand(add, link)
 	return cmd
 }
 
@@ -158,7 +234,11 @@ func (a *app) checksCmd() *cobra.Command {
 				return a.emit(it.Checks)
 			}
 			done, total := it.CheckCounts()
-			fmt.Printf("%s checks %d/%d\n", it.ID, done, total)
+			fmt.Printf("%s checks %d/%d", it.ID, done, total)
+			if d, t := it.DeliverableCounts(); t > 0 {
+				fmt.Printf(" · deliverables %d/%d", d, t)
+			}
+			fmt.Println()
 			for i, c := range it.Checks {
 				mark := "☐"
 				switch {
@@ -167,14 +247,24 @@ func (a *app) checksCmd() *cobra.Command {
 				case c.Waived != "":
 					mark = "⊘"
 				}
-				line := fmt.Sprintf("  %d %s %s", i+1, mark, c.Text)
+				hand := ""
+				if c.Manual {
+					hand = "✋ "
+				}
+				line := fmt.Sprintf("  %d %s %s%s", i+1, mark, hand, c.Text)
 				if c.Evidence != "" {
 					line += "  (" + c.Evidence + ")"
 				}
 				if c.Waived != "" {
 					line += "  (waived: " + c.Waived + ")"
 				}
+				if c.For > 0 {
+					line += fmt.Sprintf("  → deliverable %d", c.For)
+				}
 				fmt.Println(line)
+				if c.How != "" {
+					fmt.Println("      how: " + c.How)
+				}
 			}
 			return nil
 		},

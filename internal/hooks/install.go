@@ -378,18 +378,49 @@ const protocolDoc = `
 Work in this repo is tracked with Sherpa (` + "`shp`" + `, tickets in ` + "`.sherpa/`" + `). Hooks enforce it:
 edits are blocked until a ticket is claimed, and stopping with unlogged changes asks for a log.
 
-1. ` + "`shp context`" + ` to see what to work on; ` + "`shp show <T-id>`" + ` for the spec and history.
-2. ` + "`shp start <T-id>`" + ` before changing code. If nothing fits: ` + "`shp new ticket \"…\" -p <S-id>`" + `, then start it.
-3. Log as you go: ` + "`shp log \"headline\" -f <file>`" + `, with ` + "`-k decision|verify|blocker`" + ` and ` + "`-d`" + ` for details.
-4. Keep the ticket readable: ` + "`shp now \"one-line state\"`" + `, tick acceptance checks with evidence
+1. ` + "`shp context`" + ` to see what to work on; ` + "`shp brief <T-id>`" + ` for the compact outcome,
+   deliverables, next check and code map; ` + "`shp show <T-id>`" + ` for the full spec and history.
+2. ` + "`shp start <T-id>`" + ` before changing code. If nothing fits: ` + "`shp new ticket \"…\" -p <S-id> --template feature`" + `, then start it.
+3. Pin the brief before the diff: ` + "`shp deliverable add \"outcome\"`" + `,
+   ` + "`shp where add <file> --symbols <Type,Func> --deliverable N`" + `,
+   ` + "`shp check add --for N \"unit: …\"`" + `, and ` + "`shp design <T-id> --stdin`" + ` for types/enums,
+   patterns, invariants, contracts and edge cases.
+4. Log as you go: ` + "`shp log \"headline\" -f <file>`" + `, with ` + "`-k decision|verify|blocker`" + ` and ` + "`-d`" + ` for details.
+5. Keep the ticket readable: ` + "`shp now \"one-line state\"`" + `, tick acceptance checks with evidence
    (` + "`shp check <n> -e <sha|path|PR>`" + `), record measurables (` + "`shp measure \"<name>\" <value> --target <goal>`" + `).
+   Anything you can't verify yourself (looks, feel, real devices) is a manual check for a human:
+   ` + "`shp check add --manual \"…\" --how \"steps\"`" + `. Only humans tick those.
+   New epics list their deliverables: ` + "`shp new epic \"…\" -g \"goal\" -g \"goal\"`" + ` (at least two).
    Stories and epics need a Visual: ` + "`shp visual <S-id> --stdin`" + ` (a generated one shows until then).
-5. Open the PR yourself (` + "`gh pr create`" + `); Sherpa links it to the ticket. ` + "`shp sync`" + ` links PRs made elsewhere.
-6. Finish: ` + "`shp submit -m \"what changed\" --verified \"how it was checked\"`" + `. It warns about anything missing and lands in agent review.
+6. Run ` + "`shp lint <T-id>`" + ` before submitting; fix missing Why/Context/Design, deliverables without
+   checks, ticked checks without evidence and missing code-map entries.
+7. Open the PR yourself (` + "`gh pr create`" + `); Sherpa links it to the ticket. ` + "`shp sync`" + ` links PRs made elsewhere.
+8. Finish: ` + "`shp submit -m \"what changed\" --verified \"how it was checked\"`" + `. It warns about anything missing and lands in agent review.
    Reviewing agent work when asked: ` + "`shp review <T-id> --pass -m \"what you checked\"`" + ` (on to human review) or ` + "`--reject -m \"what to fix\"`" + `.
    Only a human marks work done.
-7. Never edit ` + "`.sherpa/`" + ` by hand. Commits get a ` + "`Ticket: T-xxxx`" + ` trailer automatically.
+9. Never edit ` + "`.sherpa/`" + ` by hand. Commits get a ` + "`Ticket: T-xxxx`" + ` trailer automatically.
 `
+
+// protocolHeading lets installDocs replace an older Sherpa protocol instead of
+// appending a second copy.
+const protocolHeading = "## Work tracking (Sherpa)"
+
+// upsertProtocol updates an existing Sherpa section in place, preserving any
+// user content before and after it. It reports whether the file changed.
+func upsertProtocol(data string) (string, bool) {
+	if strings.Contains(data, "shp brief") && strings.Contains(data, "shp where add") {
+		return data, false
+	}
+	body := strings.TrimRight(data, "\n")
+	if i := strings.Index(body, protocolHeading); i >= 0 {
+		end := len(body)
+		if j := strings.Index(body[i+len(protocolHeading):], "\n## "); j >= 0 {
+			end = i + len(protocolHeading) + j + 1
+		}
+		return strings.TrimRight(body[:i], "\n") + "\n\n" + strings.TrimSpace(protocolDoc) + "\n\n" + strings.TrimLeft(body[end:], "\n"), true
+	}
+	return strings.TrimRight(body, "\n") + "\n" + protocolDoc, true
+}
 
 // installDocs makes sure agents read the protocol: AGENTS.md (read by Codex,
 // Cursor and OpenCode) and CLAUDE.md, which imports AGENTS.md.
@@ -398,11 +429,13 @@ func installDocs(root string) []Result {
 	agents := filepath.Join(root, "AGENTS.md")
 	data, err := os.ReadFile(agents)
 	switch {
-	case err == nil && strings.Contains(string(data), "shp start"):
-		out = append(out, Result{Target: "docs", Path: "AGENTS.md", State: "unchanged"})
 	case err == nil:
-		if err := os.WriteFile(agents, []byte(strings.TrimRight(string(data), "\n")+"\n"+protocolDoc), 0o644); err == nil {
-			out = append(out, Result{Target: "docs", Path: "AGENTS.md", State: "updated"})
+		if next, changed := upsertProtocol(string(data)); changed {
+			if err := os.WriteFile(agents, []byte(next), 0o644); err == nil {
+				out = append(out, Result{Target: "docs", Path: "AGENTS.md", State: "updated"})
+			}
+		} else {
+			out = append(out, Result{Target: "docs", Path: "AGENTS.md", State: "unchanged"})
 		}
 	default:
 		if err := os.WriteFile(agents, []byte("# Agent instructions\n"+protocolDoc), 0o644); err == nil {

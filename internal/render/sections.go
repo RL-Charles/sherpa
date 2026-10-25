@@ -2,6 +2,9 @@ package render
 
 import (
 	"fmt"
+	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -107,6 +110,15 @@ func Badges(it *model.Item, all []*model.Item) string {
 		}
 		parts = append(parts, fmt.Sprintf("checks %d/%d%s", r, t, mark))
 	}
+	if d, t := it.DeliverableCounts(); t > 0 {
+		parts = append(parts, fmt.Sprintf("deliverables %d/%d", d, t))
+	}
+	if len(it.Code) > 0 {
+		parts = append(parts, fmt.Sprintf("%d files", len(it.Code)))
+	}
+	if hand := it.OpenManual(); len(hand) > 0 {
+		parts = append(parts, fmt.Sprintf("✋ %d to verify by hand", len(hand)))
+	}
 	if len(it.Depends) > 0 {
 		var deps []string
 		for _, d := range it.Depends {
@@ -146,6 +158,39 @@ func Sections(it *model.Item, all []*model.Item, kids []*model.Item) string {
 			fmt.Fprintf(&b, "\n\n## Visual\n\n```text\n%s\n```\n", AutoVisual(it, all))
 			autoVisual = true // it lists every child, so the Children list would repeat it
 		}
+	}
+	if len(it.Deliverables) > 0 {
+		done, total := it.DeliverableCounts()
+		fmt.Fprintf(&b, "\n\n## Deliverables · %d/%d\n", done, total)
+		for i, d := range it.Deliverables {
+			mark := "○"
+			if d.Done {
+				mark = "✓"
+			}
+			r, t := it.CheckCountsFor(i + 1)
+			fmt.Fprintf(&b, "\n### %d. %s %s", i+1, d.Text, mark)
+			if t > 0 {
+				fmt.Fprintf(&b, " · %d/%d checks", r, t)
+			}
+			b.WriteString("\n\n")
+			if d.Evidence != "" {
+				fmt.Fprintf(&b, "_evidence: `%s`_\n\n", d.Evidence)
+			}
+			if d.Note != "" {
+				fmt.Fprintf(&b, "_%s_\n\n", d.Note)
+			}
+			checks := it.ChecksFor(i + 1)
+			if len(checks) == 0 {
+				fmt.Fprintf(&b, "_No checks yet — add one with `shp check add --for %d`._\n", i+1)
+				continue
+			}
+			for _, c := range checks {
+				writeCheck(&b, c, false)
+			}
+		}
+	}
+	if len(it.Code) > 0 {
+		fmt.Fprintf(&b, "\n\n## Where\n\n```text\n%s\n```\n", CodeMap(it))
 	}
 	if len(it.Measures) > 0 {
 		b.WriteString("\n\n## Measurables\n\n| Measure | Target | Current | Evidence |\n|---|---|---|---|\n")
@@ -215,25 +260,136 @@ func Sections(it *model.Item, all []*model.Item, kids []*model.Item) string {
 	if !autoVisual {
 		b.WriteString(DocFooter(kids))
 	}
-	if len(it.Checks) > 0 {
-		r, t := it.CheckCounts()
-		fmt.Fprintf(&b, "\n\n## Checks · %d/%d\n\n", r, t)
-		for _, c := range it.Checks {
-			switch {
-			case c.Waived != "":
-				fmt.Fprintf(&b, "- [x] ~~%s~~ · _waived: %s_\n", c.Text, c.Waived)
-			case c.Done:
-				line := "- [x] " + c.Text
-				if c.Evidence != "" {
-					line += " · `" + c.Evidence + "`"
-				}
-				b.WriteString(line + "\n")
-			default:
-				b.WriteString("- [ ] " + c.Text + "\n")
+	if unlinked := it.UnlinkedChecks(); len(unlinked) > 0 {
+		resolved, total := 0, 0
+		for _, c := range unlinked {
+			if c.Resolved() {
+				resolved++
 			}
+			total++
+		}
+		label := "Checks"
+		if len(it.Deliverables) > 0 {
+			label = "Other checks"
+		}
+		fmt.Fprintf(&b, "\n\n## %s · %d/%d\n\n", label, resolved, total)
+		for _, c := range unlinked {
+			writeCheck(&b, c, true)
 		}
 	}
 	return b.String()
+}
+
+// writeCheck renders one check. showFor adds the deliverable link for checks
+// that are not already grouped under it.
+func writeCheck(b *strings.Builder, c model.Check, showFor bool) {
+	text := c.Text
+	if c.Manual {
+		text = "✋ " + text
+	}
+	suffix := ""
+	if showFor && c.For > 0 {
+		suffix = fmt.Sprintf(" · _for deliverable %d_", c.For)
+	}
+	switch {
+	case c.Waived != "":
+		fmt.Fprintf(b, "- [x] ~~%s~~ · _waived: %s_%s\n", text, c.Waived, suffix)
+	case c.Done:
+		line := "- [x] " + text
+		if c.Evidence != "" {
+			line += " · `" + c.Evidence + "`"
+		}
+		b.WriteString(line + suffix + "\n")
+	default:
+		line := "- [ ] " + text
+		if c.How != "" {
+			line += " · _how: " + c.How + "_"
+		}
+		b.WriteString(line + suffix + "\n")
+	}
+}
+
+// CodeMap renders the planned code map as a directory-grouped text tree. It
+// is deliberately preformatted: paths, symbols and notes stay aligned.
+func CodeMap(it *model.Item) string {
+	refs := append([]model.CodeRef(nil), it.Code...)
+	sort.SliceStable(refs, func(i, j int) bool {
+		return filepath.ToSlash(refs[i].Path) < filepath.ToSlash(refs[j].Path)
+	})
+
+	changeW, pathW, symW := 0, 0, 0
+	label := func(c string) string {
+		switch strings.ToLower(strings.TrimSpace(c)) {
+		case "add", "added", "new":
+			return "add"
+		case "remove", "removed", "delete", "deleted":
+			return "remove"
+		case "move", "moved":
+			return "move"
+		default:
+			return "modify"
+		}
+	}
+	for _, r := range refs {
+		if n := len(label(r.Change)); n > changeW {
+			changeW = n
+		}
+		name := path.Base(filepath.ToSlash(r.Path))
+		if r.Lines != "" {
+			name += ":" + r.Lines
+		}
+		if n := len(name); n > pathW {
+			pathW = n
+		}
+		s := "-"
+		if len(r.Symbols) > 0 {
+			s = strings.Join(r.Symbols, ", ")
+		}
+		if n := len(s); n > symW {
+			symW = n
+		}
+	}
+
+	var b strings.Builder
+	dir := "\x00"
+	for _, r := range refs {
+		p := filepath.ToSlash(r.Path)
+		d := path.Dir(p)
+		if d == "." {
+			d = "./"
+		}
+		if d != dir {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(d + "\n")
+			dir = d
+		}
+		name := path.Base(p)
+		if r.Lines != "" {
+			name += ":" + r.Lines
+		}
+		symbols := "-"
+		if len(r.Symbols) > 0 {
+			symbols = strings.Join(r.Symbols, ", ")
+		}
+		fmt.Fprintf(&b, "  %-*s  %-*s  %-*s", changeW, label(r.Change), pathW, name, symW, symbols)
+
+		var tail []string
+		if r.Deliverable > 0 {
+			tail = append(tail, fmt.Sprintf("deliver %d", r.Deliverable))
+		}
+		state := strings.TrimSpace(r.Status)
+		if state == "" {
+			state = "planned"
+		}
+		tail = append(tail, state)
+		if r.Note != "" {
+			tail = append(tail, r.Note)
+		}
+		b.WriteString("  " + strings.Join(tail, " · ") + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func cmpStr(s, def string) string {
@@ -254,6 +410,8 @@ func splitPR(url string) (repo, label string) {
 
 // ReviewCard summarises a submission for the reviewer: what changed, how it
 // was verified, what's left and what's missing. Shown on items in review.
+// It deliberately does not repeat the check count: the status strip already
+// owns that fact.
 func ReviewCard(it *model.Item, e journal.Event) string {
 	if it.Status != model.Review && it.Status != model.AgentReview {
 		return ""
@@ -263,22 +421,19 @@ func ReviewCard(it *model.Item, e journal.Event) string {
 		who = name
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "> **Review** · submitted %s by %s\n", e.TS.Local().Format("Jan 2 15:04"), who)
+	fmt.Fprintf(&b, "> **Review** · submitted %s by %s\n>\n", e.TS.Local().Format("Jan 2 15:04"), who)
 	lines := []string{}
 	if e.Message != "" {
-		lines = append(lines, e.Message)
+		lines = append(lines, "**Changed** "+e.Message)
 	}
 	if e.Verified != "" {
-		lines = append(lines, "✓ verified: "+e.Verified)
+		lines = append(lines, "✓ **Verified** "+e.Verified)
 	}
 	for _, f := range e.Followups {
-		lines = append(lines, "→ follow-up: "+f)
+		lines = append(lines, "→ **Follow-up** "+f)
 	}
 	if l := it.Links; l != nil && l.PRNumber > 0 {
-		lines = append(lines, fmt.Sprintf("⇡ PR #%d %s", l.PRNumber, l.PRState))
-	}
-	if r, t := it.CheckCounts(); t > 0 {
-		lines = append(lines, fmt.Sprintf("☑ checks %d/%d", r, t))
+		lines = append(lines, fmt.Sprintf("⇡ **PR** #%d %s", l.PRNumber, l.PRState))
 	}
 	for _, d := range e.Detail {
 		if strings.HasPrefix(d, "⚠") {
@@ -286,7 +441,7 @@ func ReviewCard(it *model.Item, e journal.Event) string {
 		}
 	}
 	for _, l := range lines {
-		b.WriteString(">\n> " + l + "\n")
+		b.WriteString("> - " + l + "\n")
 	}
 	return b.String() + "\n"
 }

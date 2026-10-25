@@ -81,19 +81,19 @@ func Build(events []journal.Event) []Session {
 // Rendering ---------------------------------------------------------------------
 
 var (
-	faint    = lipgloss.NewStyle().Faint(true)
-	title    = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.Color("39"))
+	faint    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "243"})
+	title    = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "39"})
 	sessHead = lipgloss.NewStyle().Bold(true)
-	plus     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	minus    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	openTag  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	plus     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "78"})
+	minus    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"})
+	openTag  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"})
 	colors   = map[string]lipgloss.Style{
-		"cyan":    lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
-		"green":   lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
-		"magenta": lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
-		"red":     lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
-		"yellow":  lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
-		"blue":    lipgloss.NewStyle().Foreground(lipgloss.Color("4")),
+		"cyan":    lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "45"}),
+		"green":   lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "78"}),
+		"magenta": lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "162", Dark: "205"}),
+		"red":     lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"}),
+		"yellow":  lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"}),
+		"blue":    lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "39"}),
 		"faint":   faint,
 		"":        lipgloss.NewStyle(),
 	}
@@ -102,6 +102,12 @@ var (
 // Describe returns an event's icon, colour name and headline, plus any detail
 // lines that belong under it.
 func Describe(e journal.Event) (icon, color, headline string, detail []string) {
+	return describe(e, false)
+}
+
+// describe is Describe with the option to omit a submission's message,
+// verification and follow-ups, because a review card already shows them.
+func describe(e journal.Event, hideSubmit bool) (icon, color, headline string, detail []string) {
 	detail = append(detail, e.Detail...)
 	switch e.Type {
 	case "create":
@@ -114,6 +120,12 @@ func Describe(e journal.Event) (icon, color, headline string, detail []string) {
 		return "▶", "cyan", h, detail
 	case "edit":
 		return "✐", "faint", "edited description", nil
+	case "design":
+		return "✎", "cyan", "updated the Design", detail
+	case "deliverable":
+		return "◇", "green", e.Message, detail
+	case "where":
+		return "⇢", "blue", e.Message, detail
 	case "check":
 		return "☑", "green", e.Message, detail
 	case "measure":
@@ -127,14 +139,16 @@ func Describe(e journal.Event) (icon, color, headline string, detail []string) {
 		if e.To == "agent_review" {
 			headline = "submitted for agent review"
 		}
-		if e.Message != "" {
-			detail = append([]string{e.Message}, detail...)
-		}
-		if e.Verified != "" {
-			detail = append(detail, "✓ verified: "+e.Verified)
-		}
-		for _, f := range e.Followups {
-			detail = append(detail, "→ follow-up: "+f)
+		if !hideSubmit {
+			if e.Message != "" {
+				detail = append([]string{e.Message}, detail...)
+			}
+			if e.Verified != "" {
+				detail = append(detail, "✓ verified: "+e.Verified)
+			}
+			for _, f := range e.Followups {
+				detail = append(detail, "→ follow-up: "+f)
+			}
 		}
 		if e.To == "agent_review" {
 			return "◒", "cyan", headline, detail
@@ -151,9 +165,15 @@ func Describe(e journal.Event) (icon, color, headline string, detail []string) {
 		if e.Kind == "reject" {
 			return "↩", "red", "changes requested by " + who + " · back in progress", detail
 		}
+		if e.To == "done" {
+			return "●", "green", "agent review passed by " + who + " · closed by " + e.ApprovedBy, detail
+		}
+		if e.Kind == "spawn" {
+			return "⟳", "cyan", "independent reviewer launched by " + who, detail
+		}
 		return "✔", "green", "agent review passed by " + who + " · ready for human review", detail
 	case "status":
-		if e.Message != "" {
+		if e.Message != "" && !(hideSubmit && (e.To == "review" || e.To == "agent_review")) {
 			detail = append([]string{e.Message}, detail...)
 		}
 		switch e.To {
@@ -224,11 +244,24 @@ func fileList(files []string) string {
 	return strings.Join(names, " · ")
 }
 
-const indent = 10 // "  15:04  " + icon column
+// Options controls the worklog layout. HideSubmitDetail is set when a review
+// card already shows the submission, so the log can link to it instead of
+// repeating the same message, verification and follow-ups.
+type Options struct {
+	ExpandAll        bool
+	HideSubmitDetail bool
+}
 
-// Render draws the timeline: newest session first and expanded, older ones
-// collapsed to one line unless expandAll.
+// Render draws the timeline with every session, expanding only the newest.
+// It is the old, simple entry point; use RenderOptions for the richer view.
 func Render(sessions []Session, width int, expandAll bool) []string {
+	return RenderOptions(sessions, width, Options{ExpandAll: expandAll})
+}
+
+// RenderOptions draws the timeline: newest session first and expanded, older
+// ones collapsed to one line unless ExpandAll. Sessions use a left rail, a
+// one-line summary, and one folded chip per run of routine entries.
+func RenderOptions(sessions []Session, width int, opts Options) []string {
 	entries := 0
 	for _, s := range sessions {
 		entries += len(s.Entries)
@@ -256,44 +289,54 @@ func Render(sessions []Session, width int, expandAll bool) []string {
 		"  " + title.Render("Worklog") + faint.Render("  "+summary+" · "+plural(entries, "entry", "entries")),
 		"",
 	}
-	textW := max(20, width-indent-4)
+	const entryIndent = 17 // rail + time + icon columns
+	textW := max(20, width-entryIndent-4)
 	for i := len(sessions) - 1; i >= 0; i-- {
 		s := sessions[i]
-		expanded := expandAll || i == len(sessions)-1
-		out = append(out, sessionHeader(s, expanded))
+		expanded := opts.ExpandAll || i == len(sessions)-1
+		last := i == 0
+		branch, cont := "  ├─ ", "  │  "
+		if last {
+			branch, cont = "  └─ ", "     "
+		}
+		out = append(out, branch+sessionHeader(s, expanded))
 		if !expanded {
 			continue
 		}
+		if sum := sessionSummary(s); sum != "" {
+			out = append(out, cont+"   "+faint.Render(sum))
+		}
+		out = append(out, cont)
 		folded := 0
 		flush := func() {
 			if folded > 0 {
-				out = append(out, strings.Repeat(" ", indent+2)+faint.Render(fmt.Sprintf("… %d progress %s · w shows all", folded, map[bool]string{true: "entry", false: "entries"}[folded == 1])))
+				out = append(out, cont+"   "+faint.Render(fmt.Sprintf("… %d routine %s", folded, map[bool]string{true: "entry", false: "entries"}[folded == 1])))
 				folded = 0
 			}
 		}
-		highlights := !expandAll && len(s.Entries) > 6
+		detailPad := cont + strings.Repeat(" ", max(0, entryIndent-ansi.StringWidth(cont)))
+		highlights := !opts.ExpandAll && len(s.Entries) > 6
 		for _, e := range s.Entries {
 			if highlights && routine(e) {
 				folded++
 				continue
 			}
-			flush()
-			icon, color, headline, detail := Describe(e)
+			icon, color, headline, detail := describe(e, opts.HideSubmitDetail)
 			who := ""
 			if actorName(e.Actor) != actorName(s.Actor) {
 				who = faint.Render(" · " + actorName(e.Actor))
 			}
-			pad := "    " + faint.Render(e.TS.Local().Format("15:04")) + "  " + colors[color].Render(icon) + " "
+			pad := cont + "   " + faint.Render(e.TS.Local().Format("15:04")) + "  " + colors[color].Render(icon) + " "
 			for k, l := range wrap(headline+who, textW) {
 				if k == 0 {
 					out = append(out, pad+l)
 				} else {
-					out = append(out, strings.Repeat(" ", indent+2)+l)
+					out = append(out, detailPad+l)
 				}
 			}
 			for _, d := range detail {
 				for _, l := range wrap(d, textW) {
-					out = append(out, strings.Repeat(" ", indent+2)+faint.Render(l))
+					out = append(out, detailPad+faint.Render(l))
 				}
 			}
 			if len(e.Files) > 0 && e.Type != "submit" { // submit totals are on the session line
@@ -301,17 +344,17 @@ func Render(sessions []Session, width int, expandAll bool) []string {
 				if st := stats(e.Added, e.Removed); st != "" {
 					line += "  " + st
 				}
-				out = append(out, strings.Repeat(" ", indent+2)+line)
+				out = append(out, detailPad+line)
 			}
 		}
 		flush()
 		if len(s.Touched) > 0 {
-			line := "    " + faint.Render("files touched: ")
+			line := cont + "   " + faint.Render("files touched: ")
 			for k, l := range wrap(strings.Join(s.Touched, " · "), textW) {
 				if k == 0 {
 					out = append(out, line+faint.Render(l))
 				} else {
-					out = append(out, strings.Repeat(" ", 19)+faint.Render(l))
+					out = append(out, detailPad+faint.Render(l))
 				}
 			}
 		}
@@ -336,7 +379,7 @@ func sessionHeader(s Session, expanded bool) string {
 	case s.Head != "":
 		parts = append(parts, "@"+s.Head)
 	}
-	line := "  " + arrow + " " + strings.Join(parts, faint.Render(" · "))
+	line := arrow + " " + strings.Join(parts, faint.Render(" · "))
 	if st := stats(s.Added, s.Removed); st != "" {
 		line += "  " + st
 	}
@@ -351,6 +394,52 @@ func sessionHeader(s Session, expanded bool) string {
 		line += faint.Render(n)
 	}
 	return line
+}
+
+// sessionSummary is the one-line shape of a session: plan → decisions →
+// verification → submit → close. It keeps collapsed logs informative.
+func sessionSummary(s Session) string {
+	var parts []string
+	if s.N == 0 {
+		parts = append(parts, "planning")
+	}
+	dec, ver, blk := 0, 0, 0
+	submitted, closed := false, false
+	for _, e := range s.Entries {
+		switch e.Type {
+		case "log":
+			switch e.Kind {
+			case journal.KindDecision:
+				dec++
+			case journal.KindVerify:
+				ver++
+			case journal.KindBlocker:
+				blk++
+			}
+		case "submit":
+			submitted = true
+		case "status":
+			if e.To == "done" {
+				closed = true
+			}
+		}
+	}
+	if dec > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", dec, map[bool]string{true: "decision", false: "decisions"}[dec == 1]))
+	}
+	if ver > 0 {
+		parts = append(parts, "verified")
+	}
+	if blk > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", blk, map[bool]string{true: "blocker", false: "blockers"}[blk == 1]))
+	}
+	if submitted {
+		parts = append(parts, "submitted")
+	}
+	if closed {
+		parts = append(parts, "closed")
+	}
+	return strings.Join(parts, " → ")
 }
 
 func when(start, end time.Time) string {

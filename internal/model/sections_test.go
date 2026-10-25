@@ -54,3 +54,22 @@ func TestSetSection(t *testing.T) {
 		t.Fatalf("replace:\n%q", again)
 	}
 }
+
+func TestSectionsIgnoreHeadingsInsideFences(t *testing.T) {
+	body := "## Design\n\n~~~go\n// ## not a heading\ntype Status string\n~~~\n\n## Out of scope\n\n- none\n"
+	design, ok := Section(body, "Design")
+	if !ok || !strings.Contains(design, "// ## not a heading") || !strings.Contains(design, "type Status") {
+		t.Fatalf("Design = %q, ok=%v", design, ok)
+	}
+	if strings.Contains(design, "Out of scope") {
+		t.Fatalf("Design swallowed the next section:\n%s", design)
+	}
+	updated := SetSection(body, "Design", "~~~go\n// ## still code\n~~~")
+	if !strings.Contains(updated, "## Out of scope") || !strings.Contains(updated, "// ## still code") {
+		t.Fatalf("SetSection lost content:\n%s", updated)
+	}
+	removed := RemoveSection(updated, "Design")
+	if strings.Contains(removed, "## Design") || strings.Contains(removed, "still code") || !strings.Contains(removed, "## Out of scope") {
+		t.Fatalf("RemoveSection lost content:\n%s", removed)
+	}
+}

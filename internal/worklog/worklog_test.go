@@ -88,3 +88,23 @@ func TestTouchedFilesSummarised(t *testing.T) {
 		t.Fatalf("missing touched line:\n%s", text)
 	}
 }
+
+func TestHideSubmitDetailAndSessionSummary(t *testing.T) {
+	ss := Build([]journal.Event{
+		{TS: at(0), Actor: "agent:claude", Type: "claim"},
+		{TS: at(1), Actor: "agent:claude", Type: "log", Kind: "decision", Message: "pick the boring option"},
+		{TS: at(2), Actor: "agent:claude", Type: "log", Kind: "verify", Message: "local checks"},
+		{TS: at(3), Actor: "agent:claude", Type: "submit", Message: "UNIQUECHANGE", Verified: "UNIQUEVERIFY", Followups: []string{"UNIQUEFOLLOW"}},
+	})
+	text := ansi.Strip(strings.Join(RenderOptions(ss, 90, Options{HideSubmitDetail: true}), "\n"))
+	for _, unwanted := range []string{"UNIQUECHANGE", "UNIQUEVERIFY", "UNIQUEFOLLOW"} {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("review card already shows %q, worklog should not repeat it:\n%s", unwanted, text)
+		}
+	}
+	for _, want := range []string{"submitted for review", "1 decision → verified → submitted", "▾ Session"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q:\n%s", want, text)
+		}
+	}
+}

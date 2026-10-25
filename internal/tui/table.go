@@ -25,9 +25,9 @@ import (
 var (
 	reTableSep = regexp.MustCompile(`^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$`)
 
-	tableBorder = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	tableHeader = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	cellCode    = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Background(lipgloss.Color("236"))
+	tableBorder = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "250", Dark: "240"})
+	tableHeader = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "39"})
+	cellCode    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"}).Background(lipgloss.AdaptiveColor{Light: "254", Dark: "236"})
 	cellBold    = lipgloss.NewStyle().Bold(true)
 	cellItalic  = lipgloss.NewStyle().Italic(true)
 	cellStrike  = lipgloss.NewStyle().Strikethrough(true)

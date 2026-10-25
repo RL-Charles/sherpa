@@ -14,14 +14,14 @@ import (
 //
 // Agent hooks keep a heartbeat per checkout (package live). While any is
 // fresh, a spinner replaces the status glyph of the ticket being worked on
-// and the header names the agent. The animation timer only runs while
+// and of its story and epic, and the header names the agent. The animation timer only runs while
 // someone is working, so an idle TUI does not redraw.
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 const spinEvery = 100 * time.Millisecond
 
-var workStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
+var workStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "162", Dark: "205"}).Bold(true)
 
 type spinMsg struct{}
 
@@ -47,11 +47,22 @@ func (m *Model) onSpin() tea.Cmd {
 	return spin()
 }
 
-// spinner is the current frame if an agent is working on id, else "".
+// spinner is the current frame if an agent is working on id or anything
+// under it, else "". Parents spin too, so a collapsed epic or story still
+// shows that work is happening inside it.
 func (m *Model) spinner(id string) string {
 	for _, p := range m.pulses {
-		if p.Ticket == id {
-			return spinFrames[m.frame]
+		seen := map[string]bool{}
+		for cur := p.Ticket; cur != "" && !seen[cur]; {
+			if cur == id {
+				return spinFrames[m.frame]
+			}
+			seen[cur] = true
+			it := m.findItem(cur)
+			if it == nil {
+				break
+			}
+			cur = it.Parent
 		}
 	}
 	return ""

@@ -10,6 +10,7 @@ import (
 
 // Mouse ---------------------------------------------------------------------
 //
+// The wheel scrolls whichever pane it is over without moving the selection.
 // Left-click mirrors the keyboard: in the tree it selects a row, and clicking
 // a row's arrow (or the already-selected row) expands or collapses it. In the
 // preview it starts editing with the cursor on the clicked word, moves the
@@ -23,6 +24,10 @@ func (m *Model) click(x, y int) {
 		m.flash = ""
 	}
 	if m.pick != nil && m.clickPicker(x, y) {
+		return
+	}
+	if m.find != nil {
+		m.clickFinder(x, y)
 		return
 	}
 	if x < m.treeWidth() {
@@ -51,7 +56,7 @@ func (m *Model) clickTree(x, y int) {
 	col := x - 1 - padX
 	onArrow := col >= 2*r.depth && col < 2*r.depth+2
 	again := i == m.cursor && m.focus == focusTree
-	m.focus, m.cursor = focusTree, i
+	m.focus, m.cursor, m.freeTree = focusTree, i, false
 	if r.hasKids && (onArrow || again) {
 		m.expanded[r.key()] = !m.expanded[r.key()]
 		m.rebuild(r.key())
@@ -65,6 +70,15 @@ func (m *Model) clickTree(x, y int) {
 // clickPreview handles a click at cell col of line screen inside the preview.
 func (m *Model) clickPreview(col, screen int) {
 	if screen < 0 || screen >= m.ed.height || m.selected() == nil {
+		return
+	}
+	if screen < m.ed.pinnedHeight() { // the header is read-only, never starts an edit
+		m.focus = focusPreview
+		m.layout()
+		return
+	}
+	screen -= m.ed.pinnedHeight()
+	if screen >= m.ed.visibleHeight() {
 		return
 	}
 	out, _, srcAt := m.ed.layout()
@@ -90,7 +104,7 @@ func (m *Model) clickPreview(col, screen int) {
 
 func isSessionHeader(l string) bool {
 	s := strings.TrimLeft(ansi.Strip(l), " ")
-	return strings.HasPrefix(s, "▸ ") || strings.HasPrefix(s, "▾ ")
+	return strings.Contains(s, "▸ ") || strings.Contains(s, "▾ ")
 }
 
 // sourcePos maps a click on display line d at cell col to a source position.
@@ -204,7 +218,7 @@ func (e *editor) placeCursor(row, col, screen int) {
 	}
 	out, cur, _ := e.layout()
 	if cur >= 0 {
-		e.offset = max(0, min(cur-screen, len(out)-e.height))
+		e.offset = max(0, min(cur-screen, len(out)-e.visibleHeight()))
 	}
 	e.follow()
 }

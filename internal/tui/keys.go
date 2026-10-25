@@ -9,6 +9,9 @@ type keyMap struct {
 	ExpandAll, CollapseAll key.Binding
 	Focus, Reload, Edit    key.Binding
 	Worklog, Status, Board key.Binding
+	Density                key.Binding
+	Find, Inbox            key.Binding
+	Approve, Reject        key.Binding
 	Help, Quit             key.Binding
 }
 
@@ -31,20 +34,25 @@ func defaultKeys() keyMap {
 		Worklog:     key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "all worklog sessions")),
 		Status:      key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "set status")),
 		Board:       key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "board/tree")),
+		Density:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "tree density")),
+		Find:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		Inbox:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "needs you")),
+		Approve:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "approve → done")),
+		Reject:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "send back")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Toggle, k.Edit, k.Status, k.Board, k.Focus, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Find, k.Toggle, k.Edit, k.Status, k.Board, k.Inbox, k.Focus, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right, k.Toggle},
 		{k.Top, k.Bottom, k.PageUp, k.PageDown},
-		{k.ExpandAll, k.CollapseAll, k.Focus, k.Reload, k.Edit, k.Status, k.Board, k.Worklog},
+		{k.ExpandAll, k.CollapseAll, k.Focus, k.Reload, k.Edit, k.Status, k.Board, k.Inbox, k.Worklog, k.Find, k.Density},
 		{k.Help, k.Quit},
 	}
 }

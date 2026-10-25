@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sherpa · Ticket clarity proposal</title>
+<style>
+  :root{
+    --bg:#0a0e13; --panel:#111821; --panel2:#0d131a; --line:#1e2a36;
+    --text:#d8e2ea; --dim:#6f8294; --faint:#465666;
+    --done:#56d364; --prog:#e3b341; --agent:#a371f7; --review:#db61a2;
+    --blocked:#f85149; --ready:#58a6ff; --backlog:#8b949e; --accent:#39c5cf;
+    --add:#3fb950; --del:#f85149; --code:#ffa657;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:
+      radial-gradient(1200px 700px at 78% -12%, #16232f 0%, transparent 62%),
+      radial-gradient(900px 600px at 0% 30%, #131c26 0%, transparent 55%),
+      var(--bg);
+    color:var(--text); font-family:var(--mono); font-size:15px; line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:56px 28px 90px}
+  header.hero{border-bottom:1px solid var(--line);padding-bottom:34px;margin-bottom:46px}
+  .kicker{color:var(--accent);font-size:12px;letter-spacing:.18em;text-transform:uppercase}
+  h1{font-size:40px;line-height:1.12;margin:14px 0 12px;letter-spacing:-.03em;font-weight:650}
+  h1 span{color:var(--dim);font-weight:400}
+  .lede{color:#a9b8c6;max-width:78ch;font-size:16px;line-height:1.65}
+  .meta{display:flex;gap:22px;flex-wrap:wrap;margin-top:22px;color:var(--faint);font-size:12px}
+  .meta b{color:var(--dim);font-weight:500}
+  h2{font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);
+     margin:64px 0 8px;font-weight:600}
+  h2 .n{color:var(--faint);margin-right:10px}
+  h3{font-size:21px;margin:26px 0 10px;letter-spacing:-.01em;font-weight:600}
+  p{max-width:82ch;color:#b9c6d2}
+  .sub{color:var(--dim);font-size:13px;margin-top:-2px}
+  code{background:#151e28;border:1px solid #1d2935;border-radius:4px;padding:1px 5px;
+       color:#cfe3ef;font-size:.92em}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+        border-radius:12px}
+  .grid{display:grid;gap:14px}
+  .g5{grid-template-columns:repeat(5,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:900px){.g5,.g3,.g2{grid-template-columns:1fr}}
+  .q{padding:16px 16px 14px;position:relative}
+  .q .num{color:var(--faint);font-size:11px}
+  .q h4{margin:6px 0 4px;font-size:14px;font-weight:600}
+  .q p{margin:0;font-size:12px;color:var(--dim);line-height:1.45}
+  .meter{height:4px;border-radius:3px;background:#1a2530;margin-top:12px;overflow:hidden}
+  .meter i{display:block;height:100%;border-radius:3px}
+  .q .score{font-size:11px;color:var(--faint);margin-top:6px;display:flex;justify-content:space-between}
+
+  /* terminal chrome */
+  .term{background:#080c11;border:1px solid #223040;border-radius:12px;overflow:hidden;
+        box-shadow:0 24px 60px -30px #000, inset 0 1px 0 #ffffff08;margin:16px 0 10px}
+  .term-bar{display:flex;align-items:center;gap:7px;padding:10px 14px;background:#0d141c;
+            border-bottom:1px solid #1a2531}
+  .dot{width:10px;height:10px;border-radius:50%;background:#2b3947}
+  .dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
+  .term-title{margin-left:10px;color:var(--faint);font-size:11px;letter-spacing:.04em}
+  .term-head{padding:9px 14px;border-bottom:1px solid #16212c;font-size:12px;color:var(--dim);
+             display:flex;gap:14px;flex-wrap:wrap;align-items:center;background:#0a1017}
+  .term-head .brand{color:var(--accent);font-weight:600}
+  .term-head .grow{flex:1}
+  .term-foot{padding:8px 14px;border-top:1px solid #16212c;color:var(--faint);font-size:11px;
+             background:#0a1017;white-space:nowrap;overflow:auto}
+  pre{margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.5;tab-size:2}
+  .layout{display:grid;grid-template-columns:34% 66%}
+  @media(max-width:980px){.layout{grid-template-columns:1fr}}
+  .tree{border-right:1px solid #16212c;padding:12px 10px;overflow:auto;background:#090e14;min-height:100%}
+  .docwrap{display:flex;flex-direction:column;min-width:0}
+  .doc-strip{padding:8px 16px;border-bottom:1px solid #16212c;background:#0b1219;
+             font-size:11.5px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
+  .doc{padding:14px 18px 18px;overflow:auto;white-space:pre;color:#c9d6e2}
+  .doc-scroll{max-height:none}
+
+  /* inline terminal colours */
+  .id{color:#4d7f9e}.title{color:#e6eef5}.dimtxt{color:var(--dim)}.faint{color:var(--faint)}
+  .done{color:var(--done)}.prog{color:var(--prog)}.agent{color:var(--agent)}
+  .rev{color:var(--review)}.blocked{color:var(--blocked)}.ready{color:var(--ready)}
+  .backlog{color:var(--backlog)}.acc{color:var(--accent)}.code{color:var(--code)}
+  .add{color:var(--add)}.del{color:var(--del)}.sel{background:#17222d;display:block}
+  .rule{color:#2a3947}.h{color:#8bd5ff;font-weight:600}.warn{color:#e3b341}
+  .gen{color:#3e4f60;font-size:10px;letter-spacing:.08em}
+
+  .notes{list-style:none;padding:0;margin:18px 0 0;display:grid;grid-template-columns:repeat(2,1fr);gap:10px 26px}
+  @media(max-width:900px){.notes{grid-template-columns:1fr}}
+  .notes li{display:flex;gap:11px;color:#a7b5c2;font-size:13px;line-height:1.5}
+  .notes .n{flex:0 0 20px;height:20px;border-radius:50%;background:#16222d;border:1px solid #263646;
+            color:var(--accent);font-size:11px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .notes b{color:#e2ebf3;font-weight:600}
+
+  .shot{border:1px solid #223040;border-radius:12px;overflow:hidden;background:#080c11;position:relative}
+  .shot img{display:block;width:100%;height:auto}
+  .shot a{display:block;line-height:0}
+  .mark{position:absolute;width:24px;height:24px;border-radius:50%;background:#0b0f14;
+        border:1px solid var(--blocked);color:#ff9c95;font-size:11px;display:flex;align-items:center;
+        justify-content:center;transform:translate(-50%,-50%);box-shadow:0 2px 10px #000a;
+        background:#1a0f10}
+  .callout{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-left:2px solid #263646;
+           color:#a7b5c2;font-size:13px}
+  .callout b{color:#e2ebf3}
+  .callout .n{color:var(--blocked);flex:0 0 18px}
+
+  .dupe{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  @media(max-width:900px){.dupe{grid-template-columns:1fr 1fr}}
+  .dupe .d{padding:12px;background:#101821;border:1px solid #1d2935;border-radius:8px}
+  .dupe .d .lab{font-size:10px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase}
+  .dupe .d .val{font-size:13px;margin-top:7px;color:#d5e0ea}
+  .dupe .d .note{font-size:11px;color:var(--dim);margin-top:8px}
+
+  .flow{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;align-items:stretch}
+  @media(max-width:900px){.flow{grid-template-columns:1fr}}
+  .step{padding:16px;position:relative}
+  .step .tag{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+  .step h4{margin:8px 0 6px;font-size:15px}
+  .step p{margin:0;font-size:12.5px;color:var(--dim);line-height:1.5}
+  .step .mini{margin-top:12px;padding:9px 10px;background:#090e14;border:1px solid #1a2531;
+              border-radius:6px;font-size:11px;color:#9fb0bf;white-space:pre;overflow:auto}
+  .arrow{align-self:center;color:var(--faint);text-align:center;font-size:18px}
+  @media(max-width:900px){.arrow{transform:rotate(90deg)}}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #17222d;vertical-align:top}
+  th{color:var(--faint);font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:600}
+  td{color:#aebdca}
+  td b{color:#e2ebf3;font-weight:600}
+  .pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:10.5px;border:1px solid #263646;color:#9fb0bf}
+  .pill.hi{color:#3fb950;border-color:#1d3b28;background:#0f1a13}
+  .pill.med{color:#e3b341;border-color:#3a3320;background:#1a1610}
+
+  .road{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+  @media(max-width:1000px){.road{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:640px){.road{grid-template-columns:1fr 1fr}}
+  .phase{padding:13px 12px}
+  .phase .p{font-size:10px;color:var(--faint);letter-spacing:.12em}
+  .phase h5{margin:6px 0 6px;font-size:13px;line-height:1.3}
+  .phase .e{font-size:11px;color:var(--dim)}
+  .phase .bar{height:3px;border-radius:2px;background:#1a2530;margin-top:10px;overflow:hidden}
+  .phase .bar i{display:block;height:100%;background:var(--accent)}
+
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  @media(max-width:980px){.two{grid-template-columns:1fr}}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-top:10px}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .sw{width:9px;height:9px;border-radius:2px;display:inline-block}
+  footer{margin-top:70px;padding-top:26px;border-top:1px solid var(--line);color:var(--faint);font-size:12px}
+  .toc{display:flex;gap:8px;flex-wrap:wrap;margin-top:26px}
+  .toc a{color:#93a4b4;text-decoration:none;font-size:11.5px;border:1px solid #1e2a36;
+         padding:5px 9px;border-radius:99px;background:#0d141c}
+  .toc a:hover{border-color:#33485c;color:#d8e2ea}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="kicker">Design proposal · Sherpa</div>
+  <h1>Make the ticket answer<br><span>the questions people actually ask.</span></h1>
+  <p class="lede">
+    Sherpa already records the right facts. Today they arrive as one flat markdown page with the
+    same visual weight, the same facts repeated, and the most useful question — <em>where does
+    this land in the code?</em> — answered only after the work is done. This is a proposal for a
+    readable ticket brief, a code map that exists before the diff, and an agent handoff that is
+    short enough to be read.
+  </p>
+  <div class="meta">
+    <span><b>24 Oct 2026</b></span>
+    <span><b>Scope</b> ticket model · TUI · work management · agents</span>
+    <span><b>Companion</b> docs/ticket-clarity-proposal.md</span>
+  </div>
+  <nav class="toc">
+    <a href="#diagnosis">Diagnosis</a>
+    <a href="#current">Current</a>
+    <a href="#tui">Proposed TUI</a>
+    <a href="#anatomy">Ticket anatomy</a>
+    <a href="#codemap">Code map</a>
+    <a href="#worklog">Worklog</a>
+    <a href="#agents">Agents</a>
+    <a href="#roadmap">Roadmap</a>
+  </nav>
+</header>
+
+<h2 id="diagnosis"><span class="n">01</span>The five questions</h2>
+<p class="sub">A ticket exists to let someone decide and act. Every reader asks the same five things.</p>
+<div class="grid g5" style="margin-top:18px">
+  <div class="card q">
+    <div class="num">Q1</div><h4>Why does this exist?</h4>
+    <p>Problem, user, and what changes if we ship it.</p>
+    <div class="meter"><i style="width:30%;background:var(--blocked)"></i></div>
+    <div class="score"><span>answered</span><span>30%</span></div>
+  </div>
+  <div class="card q">
+    <div class="num">Q2</div><h4>What exists when done?</h4>
+    <p>Deliverables as outcomes, not a task list.</p>
+    <div class="meter"><i style="width:38%;background:#d29922"></i></div>
+    <div class="score"><span>answered</span><span>38%</span></div>
+  </div>
+  <div class="card q">
+    <div class="num">Q3</div><h4>Where does it land?</h4>
+    <p>Files, packages, symbols, contracts, migrations.</p>
+    <div class="meter"><i style="width:14%;background:var(--blocked)"></i></div>
+    <div class="score"><span>answered</span><span>14%</span></div>
+  </div>
+  <div class="card q">
+    <div class="num">Q4</div><h4>How will we know?</h4>
+    <p>Checks and evidence, mapped to deliverables.</p>
+    <div class="meter"><i style="width:45%;background:#d29922"></i></div>
+    <div class="score"><span>answered</span><span>45%</span></div>
+  </div>
+  <div class="card q">
+    <div class="num">Q5</div><h4>What is the state?</h4>
+    <p>Status, now, blockers, worklog, what is next.</p>
+    <div class="meter"><i style="width:84%;background:var(--done)"></i></div>
+    <div class="score"><span>answered</span><span>84%</span></div>
+  </div>
+</div>
+<p style="margin-top:14px;color:var(--dim);font-size:13px">
+  Sherpa is strong at Q5. The readability problem is that Q1–Q4 are optional prose, and Q3 is
+  reconstructed from the diff after the fact.
+</p>
+
+<h2 id="current"><span class="n">02</span>What the current page does</h2>
+<h3>Same fact, four times</h3>
+<p>The real <code>T-0046</code>, rendered today. Four representations, three wordings, no link to evidence.</p>
+<div class="dupe" style="margin-top:16px">
+  <div class="d"><div class="lab">Badges</div><div class="val mono">checks 0/4</div><div class="note">One summary line, no context.</div></div>
+  <div class="d"><div class="lab">Review card</div><div class="val mono">☑ checks 0/4</div><div class="note">Repeats the same count.</div></div>
+  <div class="d"><div class="lab">Checks section</div><div class="val mono">## Checks · 0/4</div><div class="note">Repeats again, far below.</div></div>
+  <div class="d"><div class="lab">Worklog</div><div class="val mono">◑ submitted for review</div><div class="note">Repeats the submit message, verification and follow-ups.</div></div>
+</div>
+
+<h3 style="margin-top:34px">The running UI</h3>
+<div class="shot" style="margin-top:12px">
+  <a href="sherpa-preview.png" target="_blank" title="Open full size">
+    <img src="sherpa-preview.png" alt="Current Sherpa TUI: tree on the left, rendered ticket and worklog on the right">
+  </a>
+  <span class="mark" style="left:26%;top:31%">1</span>
+  <span class="mark" style="left:84%;top:4.5%">2</span>
+  <span class="mark" style="left:61%;top:12.5%">3</span>
+  <span class="mark" style="left:61%;top:83%">4</span>
+  <span class="mark" style="left:17%;top:39.5%">5</span>
+  <span class="mark" style="left:56%;top:93%">6</span>
+</div>
+<div class="grid g2" style="margin-top:12px">
+  <div class="callout"><span class="n">1</span><div><b>Titles lose to IDs.</b> The cyan ID is the loudest thing in every tree row; the title is default weight and truncates first.</div></div>
+  <div class="callout"><span class="n">2</span><div><b>Status is memorisation.</b> Seven similar glyphs, no words. The header even says <code>in_progress</code> with an underscore.</div></div>
+  <div class="callout"><span class="n">3</span><div><b>No pinned identity.</b> Scroll to the worklog and the title, status, parent and checks are gone.</div></div>
+  <div class="callout"><span class="n">4</span><div><b>One long scroll.</b> Prose, review, description and worklog share weight and have no navigation landmarks.</div></div>
+  <div class="callout"><span class="n">5</span><div><b>Selection erases meaning.</b> Reverse-video on the selected row drops its status colour and reduces contrast.</div></div>
+  <div class="callout"><span class="n">6</span><div><b>No "where".</b> There is a PR link at the end, but nothing says which files or symbols change, or which deliverable they serve.</div></div>
+</div>
+
+<h2 id="tui"><span class="n">03</span>The proposed reading view</h2>
+<p class="sub">Same two-pane TUI. A pinned strip, a capped reading measure, section landmarks, and a code map that is visible before the diff.</p>
+
+<div class="term">
+  <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">sherpa — ~/Development/sherpa</span></div>
+  <div class="term-head">
+    <span class="brand">⛰ sherpa · SHP</span>
+    <span><span class="prog">◐</span> 2 in progress</span>
+    <span><span class="agent">◒</span> 1 agent review</span>
+    <span><span class="rev">◑</span> 7 review <span class="warn">✋3</span></span>
+    <span><span class="done">●</span> 41 done</span>
+    <span class="grow"></span>
+    <span class="warn">n needs you</span>
+  </div>
+  <div class="layout">
+<pre class="tree"><span class="faint">▾</span> <span class="prog">◐</span> E-002 TUI          <span class="faint">12/19</span>
+  <span class="faint">▾</span> <span class="prog">◐</span> S-003 Browse       <span class="faint">4/6</span>
+    <span class="done">●</span> <span class="id">T-0006</span> App shell  <span class="faint">3/3 · 9d</span>
+    <span class="done">●</span> <span class="id">T-0007</span> Tree pane  <span class="faint">3/3 · 9d</span>
+    <span class="done">●</span> <span class="id">T-0008</span> Glamour    <span class="faint">2/2 · 9d</span>
+    <span class="done">●</span> <span class="id">T-0009</span> Board view <span class="faint">3/3 · 9d</span>
+  <span class="sel"><span class="acc">▌</span><span class="prog">◐</span> <span class="id">T-0059</span> <span class="title">Fuzzy search</span>   <span class="faint">2/4 · 2h · ⇡</span></span>
+    <span class="done">●</span> <span class="id">T-0065</span> Wheel      <span class="faint">2/2 · 1d</span>
+  <span class="faint">▸</span> <span class="backlog">○</span> S-004 Board        <span class="faint">3/6</span>
+  <span class="faint">▸</span> <span class="done">●</span> S-005 Editing      <span class="faint">2/2</span>
+  <span class="faint">▾</span> <span class="prog">◐</span> S-011 Live edit    <span class="faint">7/9</span>
+    <span class="done">●</span> <span class="id">T-0023</span> Blocks     <span class="faint">3/3</span>
+    <span class="done">●</span> <span class="id">T-0024</span> Render     <span class="faint">3/3</span>
+    <span class="done">●</span> <span class="id">T-0025</span> Editor     <span class="faint">3/3</span>
+    <span class="done">●</span> <span class="id">T-0026</span> Keys       <span class="faint">3/3</span>
+    <span class="done">●</span> <span class="id">T-0027</span> Safe save  <span class="faint">3/3</span>
+    <span class="done">●</span> <span class="id">T-0033</span> Tables     <span class="faint">3/3</span>
+  <span class="faint">▸</span> <span class="prog">◐</span> S-012 Vim          <span class="faint">2/3</span>
+<span class="faint">▸</span> <span class="done">●</span> E-001 Model &amp; CLI    <span class="faint">41/52</span>
+  <span class="faint">▸</span> <span class="done">●</span> S-001 Storage      <span class="faint">2/2</span>
+  <span class="faint">▸</span> <span class="prog">◐</span> S-002 Agent CLI    <span class="faint">8/9</span>
+  <span class="faint">▸</span> <span class="backlog">○</span> S-014 Clear        <span class="faint">3/6</span>
+<span class="faint">▸</span> <span class="backlog">○</span> E-003 Agent          <span class="faint">8/14</span>
+  <span class="faint">▸</span> <span class="backlog">○</span> S-006 Hooks        <span class="faint">6/9</span>
+  <span class="blocked">✖</span> <span class="id">T-0044</span> Adapters   <span class="faint">0/4 · 3d ⛔</span>
+  <span class="faint">▸</span> <span class="backlog">○</span> S-007 MCP          <span class="faint">0/1</span>
+  <span class="faint">▸</span> <span class="backlog">○</span> S-008 Bootstrap    <span class="faint">4/5</span>
+  <span class="faint">▸</span> <span class="prog">◐</span> S-013 Worklog      <span class="faint">6/6</span>
+  <span class="faint">▸</span> <span class="backlog">○</span> S-016 Review       <span class="faint">4/4</span>
+<span class="faint">▸</span> <span class="backlog">○</span> E-004 Audit          <span class="faint">0/3</span>
+  <span class="faint">▸</span> <span class="backlog">○</span> S-009 Audit        <span class="faint">0/2</span>
+  <span class="faint">▸</span> <span class="backlog">○</span> S-010 Multi        <span class="faint">0/1</span>
+
+<span class="faint">────────────────────────
+j/k</span> move   <span class="faint">enter</span> open
+<span class="faint">v</span> density  <span class="faint">[ ]</span> sections
+<span class="faint">d</span> diff     <span class="faint">o</span> code
+<span class="faint">w</span> worklog  <span class="faint">? </span> help
+</pre>
+    <div class="docwrap">
+      <div class="doc-strip">
+        <span class="prog">◐ in progress</span><span>· 2h</span><span>· @claude</span>
+        <span>· E-002 › S-004</span><span class="grow"></span><span>checks 2/4</span><span>· ⇡ #35</span>
+      </div>
+<pre class="doc"><span class="title" style="font-weight:600">T-0030 · JWT refresh</span>
+<span class="faint">──────────────────────────────────────────────────────────────────────────</span>
+<span class="acc">Now</span>    Rotating refresh tokens on use; client retry is left.
+
+<span class="h">WHY</span>
+Sessions die mid-task when the access token expires. Users lose drafts and
+re-login; support sees ~40 tickets/week. Make refresh invisible.
+
+<span class="faint">──────────────────────────────</span> <span class="h">DONE WHEN</span> <span class="faint">──────────</span> <span class="dimtxt">2/3</span>
+<span class="done">✓</span> <span class="title">Refresh accepts an expired access token</span>
+  <span class="done">✓ unit</span>  <span class="dimtxt">go test ./internal/auth -run Rotate</span>        <span class="faint">abc1234</span>
+  <span class="done">✓ e2e</span>   <span class="dimtxt">expired token → 200 + rotated cookie</span>
+<span class="done">✓</span> <span class="title">Each refresh revokes the previous token</span>
+  <span class="done">✓ unit</span>  <span class="dimtxt">TestRotateRevokesPrevious</span>                  <span class="faint">abc1234</span>
+<span class="prog">○</span> <span class="title">Web client retries once on a 401 without a redirect</span>
+  <span class="prog">○ e2e</span>   <span class="dimtxt">two expiries, no redirect</span>                  <span class="faint">—</span>
+  <span class="prog">○ load</span>  <span class="dimtxt">1k refreshes/s, p95 &lt; 50ms</span>                 <span class="faint">target 1000/s</span>
+
+<span class="faint">──────────────────────────────</span> <span class="h">WHERE</span> <span class="faint">──────────────────────</span> <span class="gen">GENERATED</span>
+<span class="faint">▾</span> internal/auth
+  <span class="prog">~</span> <span class="code">token.go</span>          <span class="dimtxt">Rotate, Clock</span>     <span class="add">+64</span> <span class="del">−12</span>  <span class="done">✓</span>
+  <span class="add">+</span> <span class="code">token_test.go</span>     <span class="dimtxt">TestRotateOnUse</span>  <span class="add">+96</span>       <span class="done">✓</span>
+<span class="faint">▾</span> api/auth
+  <span class="prog">~</span> <span class="code">handlers.go</span>       <span class="dimtxt">handleRefresh</span>    <span class="add">+38</span> <span class="del">−4</span>  <span class="done">✓</span>
+  <span class="prog">~</span> <span class="code">web/src/session.ts</span> <span class="dimtxt">retryOnce</span>       <span class="add">+18</span> <span class="del">−9</span>  <span class="prog">○</span>
+<span class="warn">△</span> <span class="warn">1 file touched outside the plan:</span> <span class="dimtxt">web/src/app.ts</span>
+
+<span class="faint">──────────────────────────────</span> <span class="h">CHECKS</span> <span class="faint">─────────────────────</span> <span class="dimtxt">2/4</span>
+<span class="done">✓ unit</span>  <span class="dimtxt">go test ./internal/auth -run Rotate</span>        <span class="faint">abc1234</span>
+<span class="done">✓ e2e</span>   <span class="dimtxt">cmd/e2e/refresh.sh</span>                         <span class="faint">CI #412</span>
+<span class="prog">○ load</span>  <span class="dimtxt">1k rps p95 &lt; 50ms</span>                          <span class="faint">not run</span>
+<span class="faint">○ manual</span> <span class="dimtxt">two expiries on iOS Safari</span>               <span class="warn">✋ how</span>
+
+<span class="faint">── 1 Brief · 2 Where · 3 Checks · 4 Work · 5 Log ──────────────────────────</span>
+<span class="faint">j/k move   [ ] section   d diff   o open code   y copy brief   w worklog</span>
+</pre>
+    </div>
+  </div>
+  <div class="term-foot">contextual help changes with focus · mouse keeps working · layout adapts below 120 columns</div>
+</div>
+
+<ol class="notes">
+  <li><span class="n">1</span><div><b>Pinned strip.</b> Title, status, age, assignee, parent, checks and PR never scroll away.</div></li>
+  <li><span class="n">2</span><div><b>Reading measure.</b> Prose is capped near 88 columns and left-aligned; tables and diagrams may still use full width.</div></li>
+  <li><span class="n">3</span><div><b>Deliverables, not checks.</b> An outcome you can show someone, with the checks that prove it nested underneath.</div></li>
+  <li><span class="n">4</span><div><b>Code map.</b> Files grouped as a tree, change type, symbols, line stats, and the deliverable each change serves.</div></li>
+  <li><span class="n">5</span><div><b>Drift is visible.</b> Files touched outside the plan are called out in amber, before review.</div></li>
+  <li><span class="n">6</span><div><b>Section landmarks.</b> Rules, labels, <code>[ ]</code> jumps and a chip bar turn one long scroll into a page.</div></li>
+  <li><span class="n">7</span><div><b>Title first.</b> The ID becomes quiet reference text; the title and status carry the scan.</div></li>
+  <li><span class="n">8</span><div><b>Generated is labelled.</b> A faint tag on Where / Work done / Worklog keeps machine output distinct from human intent.</div></li>
+</ol>
+
+<h2 id="anatomy"><span class="n">04</span>Ticket anatomy v2</h2>
+<p class="sub">The same ticket at a glance: why, outcomes, where, how we know, and what is happening. Depth lives behind folds and links.</p>
+<div class="grid g2">
+  <div class="card" style="padding:18px">
+    <div class="kicker" style="color:var(--done);font-size:10px">Human-authored</div>
+    <h4 style="margin:8px 0 10px">Brief</h4>
+    <p style="font-size:13px;margin:0 0 10px;color:var(--dim)">Stable intent. Short by design; link out for depth.</p>
+    <div class="mini" style="font-size:12px;line-height:1.8;background:#090e14;border:1px solid #1a2531;border-radius:6px;padding:12px;white-space:pre">
+<span class="h">Why</span>          problem · user · consequence
+<span class="h">Context</span>      constraints · prior art · links
+<span class="h">Approach</span>     one paragraph, not a spec
+<span class="h">Out of scope</span> what this deliberately is not
+<span class="h">Risks</span>        blast radius · rollback</div>
+  </div>
+  <div class="card" style="padding:18px">
+    <div class="kicker" style="color:var(--accent);font-size:10px">Structured, command-updated</div>
+    <h4 style="margin:8px 0 10px">State</h4>
+    <p style="font-size:13px;margin:0 0 10px;color:var(--dim)">Never hand-edited; always current; rendered once.</p>
+    <div class="mini" style="font-size:12px;line-height:1.8;background:#090e14;border:1px solid #1a2531;border-radius:6px;padding:12px;white-space:pre">
+<span class="acc">Now</span>          one line, always current
+<span class="acc">Deliverables</span> outcomes + nested checks
+<span class="acc">Code map</span>     planned vs touched + stats
+<span class="acc">Measurables</span>  target · current · evidence
+<span class="acc">Work done</span>    PR · branch · commits
+<span class="acc">Worklog</span>      journal → sessions → story</div>
+  </div>
+</div>
+
+<h3 style="margin-top:30px">Deliverable → check → evidence</h3>
+<p>This is the chain that makes "done" unambiguous. A deliverable is an outcome; a check is proof; evidence is where the proof lives.</p>
+<div class="term" style="margin-top:14px">
+  <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">one deliverable, fully evidenced</span></div>
+<pre class="doc" style="padding:18px 20px"><span class="done">✓</span> <span class="title">Web client retries once on a 401 without a redirect</span>
+   <span class="done">✓ unit</span>   <span class="dimtxt">web/src/session.test.ts · retriesOnce</span>       <span class="faint">CI #412</span>
+   <span class="done">✓ e2e</span>    <span class="dimtxt">cmd/e2e/refresh.sh · two expiries</span>          <span class="faint">CI #412</span>
+   <span class="prog">○ manual</span>  <span class="dimtxt">iOS Safari, private mode</span>                  <span class="warn">✋ tick in TUI</span>
+   <span class="faint">evidence is a command, a test name, a CI run or a checked</span>
+   <span class="faint">manual step — never a free-text "works".</span></pre>
+</div>
+
+<h2 id="codemap"><span class="n">05</span>The missing "where": plan, touch, drift</h2>
+<p>The post-edit hook already records touched files and the journal already records diff stats. The missing piece is <em>intention before the diff</em>. An agent declares its change map, then Sherpa reconciles reality against it.</p>
+<div class="flow" style="margin-top:20px">
+  <div class="card step">
+    <div class="tag">1 · plan</div>
+    <h4>Agent states the map</h4>
+    <p>Before editing, the agent runs <code>shp plan</code> with deliverables, files, symbols and checks.</p>
+    <div class="mini"><span class="acc">$</span> shp plan --stdin
+<span class="dimtxt">deliverables:</span>
+  - Refresh accepts an expired token
+<span class="dimtxt">where:</span>
+  - internal/auth/token.go
+      modify Rotate, Clock
+  - api/auth/handlers.go
+      modify handleRefresh</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="card step">
+    <div class="tag">2 · touch</div>
+    <h4>Reality marks itself</h4>
+    <p>Hooks and <code>git diff</code> mark planned files <em>touched</em>, add stats, and catch edits outside the plan.</p>
+    <div class="mini"><span class="done">✓</span> token.go        +64 −12
+<span class="done">✓</span> handlers.go     +38  −4
+<span class="warn">△</span> web/app.ts      off-plan
+<span class="faint">planned handlers.go: touched</span></div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="card step">
+    <div class="tag">3 · reconcile</div>
+    <h4>Submit speaks plainly</h4>
+    <p>Warnings at submit and a drift badge in the TUI. The review brief leads with plan vs actual.</p>
+    <div class="mini"><span class="warn">△</span> 3 files outside the plan
+<span class="warn">△</span> deliverable 2 has no check
+<span class="warn">△</span> planned handlers.go
+   not touched</div>
+  </div>
+</div>
+<p style="margin-top:14px;color:var(--dim);font-size:13px">
+  This turns "what additions are being made where" into something a reviewer can inspect <em>before</em> code exists,
+  and something the agent is held to afterwards. It is also the context an agent needs to start well.
+</p>
+
+<h2 id="worklog"><span class="n">06</span>The worklog as a story</h2>
+<div class="two">
+  <div>
+    <div class="kicker" style="color:var(--blocked);font-size:10px">Before</div>
+    <div class="term" style="margin-top:10px">
+      <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+<pre class="doc" style="padding:16px 18px;font-size:12px">  <span class="h">▾ Session 1</span> <span class="faint">· Oct 7 12:43 – Oct 12 10:40 · claude · @c81911f  +186 −16</span>
+    12:43  <span class="acc">▶</span> started  backlog → in progress
+            <span class="faint">… 1 progress entry · w shows all</span>
+    12:43  <span class="agent">⚑</span> Approval is a flag on done, recorded in the journal
+            <span class="faint">Agent stays the actor; spoofing … would falsify the audit log</span>
+            <span class="faint">Restricted to review status so approval means sign-off…</span>
+            <span class="faint">… 1 progress entry · w shows all</span>
+    12:44  <span class="done">✓</span> go test ./... passes; e2e in scratch repo
+            <span class="faint">no approver → refused; in_progress → refused; …</span>
+            <span class="faint">shp status &lt;id&gt; done still refused for agents</span>
+    12:44  <span class="rev">◑</span> submitted for review
+            <span class="faint">Agents can close in-review items … (same text as review card)</span></pre>
+    </div>
+  </div>
+  <div>
+    <div class="kicker" style="color:var(--done);font-size:10px">After</div>
+    <div class="term" style="margin-top:10px">
+      <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+<pre class="doc" style="padding:16px 18px;font-size:12px">  <span class="h">Worklog</span>  <span class="faint">1 session · 8 entries · claude          [w all]</span>
+  <span class="faint">│</span>
+  <span class="faint">├─</span> <span class="done">●</span> <span class="h">Session 1</span>  <span class="faint">Oct 7 → Oct 12 · 4d · c81911f</span>  <span class="add">+186</span> <span class="del">−16</span>
+  <span class="faint">│</span>  <span class="faint">Plan → 1 decision → verified → submitted</span>
+  <span class="faint">│</span>
+  <span class="faint">│</span>   12:43  <span class="acc">▶</span>  started · backlog → in progress
+  <span class="faint">│</span>   12:43  <span class="agent">⚑</span>  Approval is a flag on <span class="code">done</span>, recorded in the journal
+  <span class="faint">│</span>             <span class="faint">Agent stays the actor; spoofing SHERPA_ACTOR would falsify the log.</span>
+  <span class="faint">│</span>   12:44  <span class="done">✓</span>  go test ./... · e2e in a scratch repo
+  <span class="faint">│</span>             <span class="faint">no approver → refused · in_progress → refused</span>
+  <span class="faint">│</span>   12:44  <span class="rev">◑</span>  submitted → <span class="dimtxt">see Review</span>
+  <span class="faint">│</span>   <span class="faint">▸ 3 routine entries</span>
+  <span class="faint">│</span>
+  <span class="faint">└─</span> <span class="backlog">○</span> <span class="h">Planning</span>  <span class="faint">Oct 7 · 2 entries</span></pre>
+    </div>
+  </div>
+</div>
+<ol class="notes" style="margin-top:16px">
+  <li><span class="n">1</span><div><b>One session summary.</b> Generated from the entries, so folded sessions still tell you their shape.</div></li>
+  <li><span class="n">2</span><div><b>One folded chip.</b> Not one per folded run; the repetition itself was noise.</div></li>
+  <li><span class="n">3</span><div><b>Hanging indent.</b> Detail lines align under the headline, dimmed, so the eye follows one column.</div></li>
+  <li><span class="n">4</span><div><b>No duplicate submit.</b> The worklog links to the Review block; the full submission text lives there once.</div></li>
+</ol>
+
+<h2><span class="n">07</span>Work management: what to do next</h2>
+<div class="term">
+  <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">shp board — grouped by status and actor</span></div>
+<pre class="doc" style="padding:18px 20px"><span class="prog">◐ In progress</span>  <span class="faint">2/3 WIP</span>
+  <span class="acc">claude</span>    <span class="prog">◐</span> <span class="id">T-0059</span> <span class="title">Fuzzy search</span>          <span class="faint">2h · 6 files · 2/4</span>
+  <span class="acc">opencode</span>  <span class="prog">◐</span> <span class="id">T-0066</span> <span class="title">Epic goals</span>             <span class="faint">4h · 2 files · 1/2</span>
+
+<span class="agent">◒ Agent review</span>  <span class="faint">1</span>
+  <span class="acc">codex</span>     <span class="agent">◒</span> <span class="id">T-0044</span> <span class="title">Hook adapters</span>          <span class="faint">1d · ⇡ #41 open</span>
+
+<span class="rev">◑ Needs you</span>  <span class="warn">3</span>   <span class="faint">✋ manual checks (2) · failing check (1)</span>
+  <span class="warn">✋</span> <span class="id">T-0061</span> <span class="title">Manual checks</span>              <span class="faint">2d · 1 hand check</span>
+  <span class="warn">✋</span> <span class="id">T-0046</span> <span class="title">Approved close</span>              <span class="faint">5d · 0/4 checks</span>
+  <span class="blocked">!</span> <span class="id">T-0057</span> <span class="title">Community files</span>            <span class="faint">3d · PR missing</span>
+
+<span class="faint">stale: 1 in progress &gt;3d · 2 in review &gt;7d · next: shp next</span></pre>
+</div>
+<div class="grid g3" style="margin-top:14px">
+  <div class="card q"><h4 style="margin-top:0">shp next</h4><p>Ready + unblocked + priority + age. Prints one ticket and why, `--claim` to start.</p></div>
+  <div class="card q"><h4 style="margin-top:0">shp standup</h4><p>Since the last workday: moved, finished, blocked, needs you, in flight with age.</p></div>
+  <div class="card q"><h4 style="margin-top:0">shp stats</h4><p>Cycle time, review latency, rework rate, plan drift — all from the existing journal.</p></div>
+</div>
+
+<h2 id="agents"><span class="n">08</span>Give the agent the same brief</h2>
+<p>OpenCode's advantage is compact, timely context. Sherpa can generate that from what it already knows: the ticket, the plan, the touched files and the journal.</p>
+<div class="term">
+  <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">shp brief T-0030 — ≤400 tokens, stable order</span></div>
+<pre class="doc" style="padding:18px 20px"><span class="acc">TICKET</span> T-0030 · JWT refresh · <span class="prog">◐ in progress</span> · S-004
+<span class="acc">Outcome</span> users stay signed in past access-token expiry without a re-login.
+<span class="acc">Deliverables</span> <span class="done">2/3</span>
+  <span class="done">✓</span> Refresh accepts an expired access token
+  <span class="done">✓</span> Each refresh revokes the previous token
+  <span class="prog">○</span> Web client retries once on a 401 without a redirect
+<span class="acc">Next open check</span> #3 e2e — two expiries, no redirect
+<span class="acc">Where</span> <span class="faint">(planned, 1 touched off-plan)</span>
+  <span class="prog">~</span> internal/auth/token.go      <span class="faint">modify Rotate, Clock</span>   <span class="add">+64</span> <span class="del">−12</span>
+  <span class="prog">~</span> api/auth/handlers.go        <span class="faint">modify handleRefresh</span>   <span class="add">+38</span> <span class="del">−4</span>
+  <span class="prog">~</span> web/src/session.ts          <span class="faint">modify retryOnce</span>       <span class="add">+18</span> <span class="del">−9</span>
+  <span class="warn">△</span> web/src/app.ts              <span class="warn">touched off-plan</span>
+<span class="acc">Constraints</span> no schema change · token &lt; 1KB · no new deps
+<span class="acc">Decisions</span> rotate on use, not a timer <span class="faint">(12 Oct)</span>
+<span class="acc">Do not</span> add dependencies · touch billing/ · change token format
+
+<span class="faint">injected at session start, after compaction, and by `shp brief`</span></pre>
+</div>
+
+<h3 style="margin-top:26px">Integration path</h3>
+<div class="grid g3">
+  <div class="card step">
+    <div class="tag">MCP</div>
+    <h4>Typed tools, not shell</h4>
+    <p>Ship <code>shp mcp</code> with <code>brief</code>, <code>claim</code>, <code>plan</code>, <code>log</code>, <code>check</code>, <code>submit</code>, <code>diff_map</code>. Resources expose tickets and the board.</p>
+  </div>
+  <div class="card step">
+    <div class="tag">OpenCode</div>
+    <h4>Plugin does the wiring</h4>
+    <p>Inject the brief, capture file edits and test output, record session id, and publish live activity per tool call. Fail open, as today.</p>
+  </div>
+  <div class="card step">
+    <div class="tag">Review</div>
+    <h4>A brief, not a ticket</h4>
+    <p><code>shp review --brief</code> gives the reviewer plan-vs-actual, deliverable coverage, checks, diff and one pointed question.</p>
+  </div>
+</div>
+
+<h3 style="margin-top:26px">Live activity instead of a generic spinner</h3>
+<div class="term" style="margin-top:12px">
+  <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">.sherpa/.local/live/&lt;session&gt;.json → TUI</span></div>
+<pre class="doc" style="padding:16px 20px">⛰ sherpa · SHP   <span class="prog">␣ claude · editing internal/auth/token.go · 12s</span>   <span class="warn">△ drift: web/src/app.ts</span>
+<span class="faint">the agent is not "working" — it is editing a named file, with a named drift warning</span></pre>
+</div>
+
+<h2 id="roadmap"><span class="n">09</span>Roadmap by impact per unit of effort</h2>
+<p class="sub">Bars show relative impact; days show build effort.</p>
+<div class="road" style="margin-top:16px">
+  <div class="card phase"><div class="p">PHASE 0</div><h5>Readability pass</h5><div class="e">1–2 days</div><div class="bar"><i style="width:96%"></i></div></div>
+  <div class="card phase"><div class="p">PHASE 1</div><h5>Brief v2 + code map</h5><div class="e">3–5 days</div><div class="bar"><i style="width:92%"></i></div></div>
+  <div class="card phase"><div class="p">PHASE 2</div><h5>Navigate &amp; inspect</h5><div class="e">2–3 days</div><div class="bar"><i style="width:78%"></i></div></div>
+  <div class="card phase"><div class="p">PHASE 3</div><h5>Agent brief + drift</h5><div class="e">4–6 days</div><div class="bar"><i style="width:90%"></i></div></div>
+  <div class="card phase"><div class="p">PHASE 4</div><h5>Work management</h5><div class="e">3–5 days</div><div class="bar"><i style="width:64%"></i></div></div>
+  <div class="card phase"><div class="p">PHASE 5</div><h5>Lint + review brief</h5><div class="e">2–3 days</div><div class="bar"><i style="width:55%"></i></div></div>
+</div>
+<table>
+  <thead><tr><th>Phase</th><th>Ships</th><th>Why it matters</th><th>Impact</th></tr></thead>
+  <tbody>
+    <tr><td><b>0</b></td><td>Deduplicate, pinned strip, title-first, dates, colours, reading width, section rules, worklog rail</td><td>The page stops fighting the reader; immediate relief across every repo.</td><td><span class="pill hi">very high</span></td></tr>
+    <tr><td><b>1</b></td><td><code>deliverables</code>, <code>checks.for</code>, <code>code</code> map, <code>shp deliverable/where/plan</code>, templates</td><td>Answers "what does done look like" and "where does it land" before the diff.</td><td><span class="pill hi">very high</span></td></tr>
+    <tr><td><b>2</b></td><td>Outline, <code>[ ]</code>/<code>1–5</code>, <code>d</code> diff, <code>o</code> open file, <code>y</code> copy brief, tree metadata</td><td>Makes the TUI navigable instead of scrollable.</td><td><span class="pill hi">high</span></td></tr>
+    <tr><td><b>3</b></td><td><code>shp brief</code>, plan drift, OpenCode/Claude injection, evidence capture, live activity</td><td>Agents start with the right context and are held to their own plan.</td><td><span class="pill hi">very high</span></td></tr>
+    <tr><td><b>4</b></td><td><code>shp next</code>, standup, aging, WIP, agent lanes, cycle time</td><td>Turns tracking into triage.</td><td><span class="pill med">medium–high</span></td></tr>
+    <tr><td><b>5</b></td><td><code>shp lint</code>, completeness chip, review brief, CI mode</td><td>Keeps clarity from decaying without blocking anyone.</td><td><span class="pill med">medium</span></td></tr>
+  </tbody>
+</table>
+
+<div class="card" style="padding:20px 22px;margin-top:22px;border-color:#24405a">
+  <div class="kicker">If only three things ship</div>
+  <p style="margin:8px 0 0;font-size:15px;color:#d8e2ea">
+    <b>1.</b> Deduplicate the state and pin the ticket strip. &nbsp;
+    <b>2.</b> Add deliverables and the code map. &nbsp;
+    <b>3.</b> Ship <code>shp brief</code> and plan-drift warnings.
+  </p>
+  <p style="margin:8px 0 0;font-size:13px;color:var(--dim)">
+    Those three change the reading experience and the agent handoff more than everything else combined.
+  </p>
+</div>
+
+<h2><span class="n">10</span>How we know it worked</h2>
+<div class="grid g2">
+  <div class="card q">
+    <h4 style="margin-top:0">The 30-second test</h4>
+    <p style="line-height:1.7">
+      1. State the status and whether it needs you — 5s<br>
+      2. State what "done" means — 15s<br>
+      3. Name the files that will change — 20s<br>
+      4. Find evidence for each check — 30s<br>
+      5. Explain the last decision and who made it — 30s
+    </p>
+  </div>
+  <div class="card q">
+    <h4 style="margin-top:0">Signals over time</h4>
+    <p style="line-height:1.7">
+      review latency ↓ · reject rate ↓ · % tickets with a code map at submit ↑<br>
+      % checks with evidence ↑ · plan drift visible, not silent<br>
+      "what is this ticket?" questions in review → 0
+    </p>
+  </div>
+</div>
+
+<div class="card" style="padding:20px 22px;margin-top:26px">
+  <div class="kicker" style="color:var(--warn)">Guardrails</div>
+  <p style="margin:8px 0 0;font-size:13px;color:#b9c6d2">
+    New fields are additive, never required. <code>shp lint</code> warns; it never blocks. Generated sections are labelled.
+    Human prose stays human — agents propose plan entries, they do not write the brief.
+    Every fact renders once, from one source, in one place.
+  </p>
+</div>
+
+<footer>
+  Sherpa · ticket clarity proposal · companion to <code>docs/ticket-clarity-proposal.md</code><br>
+  Wireframes are illustrative; the data, glyphs and ticket IDs are taken from the real repository.
+</footer>
+
+</div>
+</body>
+</html>

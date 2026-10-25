@@ -156,28 +156,34 @@ func (s Status) Glyph() string {
 // Item is one epic, story or ticket. Frontmatter fields live in the YAML
 // header of its markdown file; Body is everything after it.
 type Item struct {
-	ID       string    `yaml:"id" json:"id"`
-	Kind     Kind      `yaml:"kind" json:"kind"`
-	Title    string    `yaml:"title" json:"title"`
-	Status   Status    `yaml:"status" json:"status"`
-	Parent   string    `yaml:"parent,omitempty" json:"parent,omitempty"`
-	Assignee string    `yaml:"assignee,omitempty" json:"assignee,omitempty"`
-	Priority string    `yaml:"priority,omitempty" json:"priority,omitempty"`
-	Labels   []string  `yaml:"labels,omitempty" json:"labels,omitempty"`
-	Depends  []string  `yaml:"depends,omitempty" json:"depends,omitempty"`
-	Now      string    `yaml:"now,omitempty" json:"now,omitempty"` // one-line current state
-	Created  time.Time `yaml:"created" json:"created"`
-	Updated  time.Time `yaml:"updated" json:"updated"`
-	Checks   []Check   `yaml:"checks,omitempty" json:"checks,omitempty"`
-	Measures []Measure `yaml:"measures,omitempty" json:"measures,omitempty"`
-	Links    *Links    `yaml:"links,omitempty" json:"links,omitempty"`
-	Body     string    `yaml:"-" json:"body,omitempty"`
+	ID           string        `yaml:"id" json:"id"`
+	Kind         Kind          `yaml:"kind" json:"kind"`
+	Title        string        `yaml:"title" json:"title"`
+	Status       Status        `yaml:"status" json:"status"`
+	Parent       string        `yaml:"parent,omitempty" json:"parent,omitempty"`
+	Assignee     string        `yaml:"assignee,omitempty" json:"assignee,omitempty"`
+	Priority     string        `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Labels       []string      `yaml:"labels,omitempty" json:"labels,omitempty"`
+	Depends      []string      `yaml:"depends,omitempty" json:"depends,omitempty"`
+	Now          string        `yaml:"now,omitempty" json:"now,omitempty"` // one-line current state
+	Created      time.Time     `yaml:"created" json:"created"`
+	Updated      time.Time     `yaml:"updated" json:"updated"`
+	Checks       []Check       `yaml:"checks,omitempty" json:"checks,omitempty"`
+	Measures     []Measure     `yaml:"measures,omitempty" json:"measures,omitempty"`
+	Deliverables []Deliverable `yaml:"deliverables,omitempty" json:"deliverables,omitempty"`
+	Code         []CodeRef     `yaml:"code,omitempty" json:"code,omitempty"`
+	Template     string        `yaml:"template,omitempty" json:"template,omitempty"` // feature, bug, spike or chore
+	Links        *Links        `yaml:"links,omitempty" json:"links,omitempty"`
+	Body         string        `yaml:"-" json:"body,omitempty"`
 }
 
 // DefaultBody is the markdown skeleton for a new item of kind k. The
 // worklog is not part of it: it is generated from the journal.
 func DefaultBody(k Kind, description string) string {
-	if description == "" {
+	switch {
+	case k == Epic && description == "":
+		description = "- _First deliverable_\n- _Second deliverable_"
+	case description == "":
 		description = "_No description yet._"
 	}
 	switch k {

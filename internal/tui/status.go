@@ -133,6 +133,9 @@ func (m *Model) footerView() string {
 		line, _ := m.pickerView()
 		return line
 	}
+	if m.reject != nil {
+		return m.rejectView()
+	}
 	return m.help.View(m.helpKeys())
 }
 

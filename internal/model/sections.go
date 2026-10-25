@@ -11,14 +11,40 @@ import (
 // Sherpa renders them the same way everywhere.
 
 // Check is one acceptance criterion. Waived counts as resolved, with a reason.
+// A manual check needs a human to verify it by hand; How says how.
+// For links the check to a 1-based deliverable index (0 = unlinked).
 type Check struct {
 	Text     string `yaml:"text" json:"text"`
 	Done     bool   `yaml:"done,omitempty" json:"done,omitempty"`
 	Evidence string `yaml:"evidence,omitempty" json:"evidence,omitempty"`
 	Waived   string `yaml:"waived,omitempty" json:"waived,omitempty"`
+	Manual   bool   `yaml:"manual,omitempty" json:"manual,omitempty"`
+	How      string `yaml:"how,omitempty" json:"how,omitempty"`
+	For      int    `yaml:"for,omitempty" json:"for,omitempty"`
 }
 
 func (c Check) Resolved() bool { return c.Done || c.Waived != "" }
+
+// Deliverable is an outcome: what exists when the work is done. Checks prove
+// it. It is deliberately separate from a task list.
+type Deliverable struct {
+	Text     string `yaml:"text" json:"text"`
+	Done     bool   `yaml:"done,omitempty" json:"done,omitempty"`
+	Evidence string `yaml:"evidence,omitempty" json:"evidence,omitempty"`
+	Note     string `yaml:"note,omitempty" json:"note,omitempty"`
+}
+
+// CodeRef is one file (and optionally symbols) the work changes. Change is
+// add, modify, remove or move; Status is planned, touched or done.
+type CodeRef struct {
+	Path        string   `yaml:"path" json:"path"`
+	Change      string   `yaml:"change,omitempty" json:"change,omitempty"`
+	Symbols     []string `yaml:"symbols,omitempty" json:"symbols,omitempty"`
+	Note        string   `yaml:"note,omitempty" json:"note,omitempty"`
+	Lines       string   `yaml:"lines,omitempty" json:"lines,omitempty"`
+	Deliverable int      `yaml:"deliverable,omitempty" json:"deliverable,omitempty"`
+	Status      string   `yaml:"status,omitempty" json:"status,omitempty"`
+}
 
 // Measure is a measurable outcome: what was targeted and what was reached.
 type Measure struct {
@@ -109,9 +135,142 @@ func (it *Item) CheckCounts() (resolved, total int) {
 	return resolved, len(it.Checks)
 }
 
+// DeliverableCounts returns how many deliverables are marked done.
+func (it *Item) DeliverableCounts() (done, total int) {
+	for _, d := range it.Deliverables {
+		if d.Done {
+			done++
+		}
+	}
+	return done, len(it.Deliverables)
+}
+
+// ChecksFor returns the checks linked to the 1-based deliverable n.
+func (it *Item) ChecksFor(n int) []Check {
+	var out []Check
+	for _, c := range it.Checks {
+		if c.For == n {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// CheckCountsFor returns resolved and total checks linked to deliverable n.
+func (it *Item) CheckCountsFor(n int) (resolved, total int) {
+	for _, c := range it.Checks {
+		if c.For != n {
+			continue
+		}
+		if c.Resolved() {
+			resolved++
+		}
+		total++
+	}
+	return resolved, total
+}
+
+// UnlinkedChecks returns checks that are not attached to a valid deliverable.
+// They are rendered in the ordinary Checks section.
+func (it *Item) UnlinkedChecks() []Check {
+	var out []Check
+	for _, c := range it.Checks {
+		if c.For < 1 || c.For > len(it.Deliverables) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// CodeFor returns the code-map entries that serve the 1-based deliverable n.
+func (it *Item) CodeFor(n int) []CodeRef {
+	var out []CodeRef
+	for _, c := range it.Code {
+		if c.Deliverable == n {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// OpenManual returns the 1-based numbers of manual checks still unresolved:
+// the ones only a human can sign off.
+func (it *Item) OpenManual() []int {
+	var n []int
+	for i, c := range it.Checks {
+		if c.Manual && !c.Resolved() {
+			n = append(n, i+1)
+		}
+	}
+	return n
+}
+
 // Body sections -----------------------------------------------------------------
 
-var reHeading2 = regexp.MustCompile(`(?m)^## (.+?)[ \t]*$`)
+type headingSpan struct {
+	lineStart int // first byte of the heading line
+	lineEnd   int // first byte after the heading line, before its newline
+	textStart int // first byte of the heading text
+	textEnd   int // first byte after the heading text
+}
+
+// headingSpans finds "## " headings outside fenced code blocks, so a Design
+// section may contain Go, SQL or shell blocks with "##" comments without
+// those lines being mistaken for sections.
+func headingSpans(body string) []headingSpan {
+	var out []headingSpan
+	inFence := false
+	var fenceChar byte
+	fenceLen := 0
+	for start := 0; start < len(body); {
+		lineEnd := strings.IndexByte(body[start:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(body)
+		} else {
+			lineEnd += start
+		}
+		line := body[start:lineEnd]
+		trimmed := strings.TrimLeft(line, " \t")
+		if inFence {
+			if n := runOf(trimmed, fenceChar); n >= fenceLen {
+				inFence, fenceChar, fenceLen = false, 0, 0
+			}
+		} else if c, n, ok := fenceOpen(trimmed); ok {
+			inFence, fenceChar, fenceLen = true, c, n
+		} else if strings.HasPrefix(line, "## ") {
+			textStart := start + 3
+			textEnd := lineEnd
+			for textEnd > textStart && (body[textEnd-1] == ' ' || body[textEnd-1] == '\t') {
+				textEnd--
+			}
+			out = append(out, headingSpan{lineStart: start, lineEnd: lineEnd, textStart: textStart, textEnd: textEnd})
+		}
+		if lineEnd == len(body) {
+			break
+		}
+		start = lineEnd + 1
+	}
+	return out
+}
+
+func runOf(s string, c byte) int {
+	n := 0
+	for n < len(s) && s[n] == c {
+		n++
+	}
+	return n
+}
+
+func fenceOpen(s string) (byte, int, bool) {
+	if len(s) < 3 || (s[0] != '`' && s[0] != '~') {
+		return 0, 0, false
+	}
+	n := runOf(s, s[0])
+	if n < 3 {
+		return 0, 0, false
+	}
+	return s[0], n, true
+}
 
 // Section returns the text under "## <name>" (case-insensitive), or "" and false.
 func Section(body, name string) (string, bool) {
@@ -124,14 +283,14 @@ func Section(body, name string) (string, bool) {
 
 // sectionSpan finds the content span of "## name" up to the next "## ".
 func sectionSpan(body, name string) (start, end int, ok bool) {
-	heads := reHeading2.FindAllStringSubmatchIndex(body, -1)
+	heads := headingSpans(body)
 	for i, h := range heads {
-		if strings.EqualFold(strings.TrimSpace(body[h[2]:h[3]]), name) {
+		if strings.EqualFold(strings.TrimSpace(body[h.textStart:h.textEnd]), name) {
 			end = len(body)
 			if i+1 < len(heads) {
-				end = heads[i+1][0]
+				end = heads[i+1].lineStart
 			}
-			return h[1], end, true
+			return h.lineEnd, end, true
 		}
 	}
 	return 0, 0, false
@@ -145,23 +304,23 @@ func SetSection(body, name, content string) string {
 		return strings.TrimRight(body[:start], " ") + "\n\n" + content + "\n\n" + strings.TrimLeft(body[end:], "\n")
 	}
 	block := "## " + name + "\n\n" + content + "\n\n"
-	heads := reHeading2.FindAllStringIndex(body, -1)
+	heads := headingSpans(body)
 	if len(heads) >= 2 {
-		return body[:heads[1][0]] + block + body[heads[1][0]:]
+		return body[:heads[1].lineStart] + block + body[heads[1].lineStart:]
 	}
 	return strings.TrimRight(body, "\n") + "\n\n" + strings.TrimRight(block, "\n") + "\n"
 }
 
 // RemoveSection deletes "## name" and its content.
 func RemoveSection(body, name string) string {
-	heads := reHeading2.FindAllStringSubmatchIndex(body, -1)
+	heads := headingSpans(body)
 	for i, h := range heads {
-		if strings.EqualFold(strings.TrimSpace(body[h[2]:h[3]]), name) {
+		if strings.EqualFold(strings.TrimSpace(body[h.textStart:h.textEnd]), name) {
 			end := len(body)
 			if i+1 < len(heads) {
-				end = heads[i+1][0]
+				end = heads[i+1].lineStart
 			}
-			return strings.TrimRight(body[:h[0]], "\n") + "\n" + map[bool]string{true: "\n", false: ""}[end < len(body)] + body[end:]
+			return strings.TrimRight(body[:h.lineStart], "\n") + "\n" + map[bool]string{true: "\n", false: ""}[end < len(body)] + body[end:]
 		}
 	}
 	return body

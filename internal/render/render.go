@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/glamour"
 	gansi "github.com/charmbracelet/glamour/ansi"
@@ -21,24 +22,69 @@ import (
 func IsTTY() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 
 var (
-	dim   = lipgloss.NewStyle().Faint(true)
+	dim   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "243"})
 	bold  = lipgloss.NewStyle().Bold(true)
-	idCol = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	idCol = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "243", Dark: "244"})
 )
+
+// Age is a compact, human duration since t: "just now", "5m", "3h", "2d",
+// "4w", "3mo", "1y". It is used wherever an absolute timestamp would make
+// the reader do arithmetic.
+func Age(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dw", int(d.Hours()/(24*7)))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
+	default:
+		return fmt.Sprintf("%dy", int(d.Hours()/(24*365)))
+	}
+}
+
+// Ago is Age with a suffix, except for "just now".
+func Ago(t time.Time) string {
+	a := Age(t)
+	if a == "" || a == "just now" {
+		return a
+	}
+	return a + " ago"
+}
+
+// statusColor keeps the seven states visually distinct. The palette is
+// adaptive so light terminals keep contrast, and red is reserved for blocked.
+var statusColor = map[model.Status]lipgloss.TerminalColor{
+	model.Backlog:     lipgloss.AdaptiveColor{Light: "245", Dark: "240"},
+	model.Ready:       lipgloss.AdaptiveColor{Light: "25", Dark: "39"},
+	model.InProgress:  lipgloss.AdaptiveColor{Light: "136", Dark: "214"},
+	model.AgentReview: lipgloss.AdaptiveColor{Light: "91", Dark: "141"},
+	model.Review:      lipgloss.AdaptiveColor{Light: "162", Dark: "205"},
+	model.Blocked:     lipgloss.AdaptiveColor{Light: "124", Dark: "203"},
+	model.Done:        lipgloss.AdaptiveColor{Light: "28", Dark: "78"},
+}
 
 // StatusStyle colours text by status.
 func StatusStyle(s model.Status) lipgloss.Style {
-	color := map[model.Status]string{
-		model.Backlog:     "8",
-		model.Ready:       "4",
-		model.InProgress:  "3",
-		model.AgentReview: "6",
-		model.Review:      "5",
-		model.Blocked:     "1",
-		model.Done:        "2",
-	}[s]
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+	c, ok := statusColor[s]
+	if !ok {
+		c = lipgloss.AdaptiveColor{Light: "245", Dark: "240"}
+	}
+	return lipgloss.NewStyle().Foreground(c)
 }
+
+// statusWord is the human label used in CLI output and the labelled tree.
+func statusWord(s model.Status) string { return strings.ReplaceAll(string(s), "_", " ") }
 
 // Line is a one-line summary: glyph, ID, title, status, assignee.
 func Line(it *model.Item) string {
@@ -47,7 +93,7 @@ func Line(it *model.Item) string {
 	if it.Kind == model.Epic {
 		title = bold.Render(title)
 	}
-	s := fmt.Sprintf("%s %s %s %s", st.Render(it.Status.Glyph()), idCol.Render(it.ID), title, st.Render(string(it.Status)))
+	s := fmt.Sprintf("%s %s %s %s", st.Render(it.Status.Glyph()), idCol.Render(it.ID), title, st.Render(statusWord(it.Status)))
 	if it.Assignee != "" {
 		s += dim.Render(" @" + it.Assignee)
 	}
@@ -92,9 +138,11 @@ func Markdown(md string) string {
 	if !IsTTY() {
 		return md
 	}
+	// Cap the measure: 120-column prose is tiring to read even on a wide
+	// terminal.
 	width := 100
 	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 20 {
-		width = min(w-2, 120)
+		width = min(w-2, 100)
 	}
 	out, err := MarkdownWidth(md, width, "")
 	if err != nil {
@@ -131,6 +179,7 @@ func Style(name string) gansi.StyleConfig {
 		return gansi.StyleBlock{StylePrimitive: gansi.StylePrimitive{Color: &color, Bold: &yes, Underline: &underline}}
 	}
 	cfg.H2 = heading(h2, true)
+	cfg.H2.BlockPrefix = "\n" + strings.Repeat("─", 28) + "\n"
 	cfg.H3 = heading(h3, false)
 	cfg.H4 = heading(minor, false)
 	cfg.H5 = heading(minor, false)
@@ -151,7 +200,10 @@ func Document(it *model.Item, parent *model.Item, kids []*model.Item, all ...*mo
 func DocHeader(it *model.Item, parent *model.Item, all ...*model.Item) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s · %s\n\n", it.ID, it.Title)
-	meta := []string{"`" + string(it.Kind) + "`", it.Status.Glyph() + " **" + string(it.Status) + "**"}
+	meta := []string{"`" + string(it.Kind) + "`", it.Status.Glyph() + " **" + statusWord(it.Status) + "**"}
+	if it.Template != "" {
+		meta = append(meta, "**"+it.Template+"**")
+	}
 	if it.Priority != "" {
 		meta = append(meta, "**"+it.Priority+"**")
 	}
@@ -161,7 +213,7 @@ func DocHeader(it *model.Item, parent *model.Item, all ...*model.Item) string {
 	for _, l := range it.Labels {
 		meta = append(meta, "#"+l)
 	}
-	meta = append(meta, "_updated "+it.Updated.Local().Format("2006-01-02 15:04")+"_")
+	meta = append(meta, "_updated "+Ago(it.Updated)+"_")
 	b.WriteString(strings.Join(meta, " · ") + "\n\n")
 	if badges := Badges(it, all); badges != "" {
 		b.WriteString(badges + "\n\n")
@@ -171,6 +223,45 @@ func DocHeader(it *model.Item, parent *model.Item, all ...*model.Item) string {
 	}
 	if parent != nil {
 		fmt.Fprintf(&b, "> in **%s** · %s\n\n", parent.ID, parent.Title)
+	}
+	return b.String()
+}
+
+// PreviewHeader is the compact, pinned strip above the TUI document: title,
+// one status/metadata line, and Now. The full DocHeader (badges, parent quote)
+// stays for `shp show`; the TUI keeps the essential identity on screen and
+// lets the rest scroll.
+func PreviewHeader(it *model.Item, parent *model.Item) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s · %s\n\n", it.ID, it.Title)
+	meta := []string{it.Status.Glyph() + " **" + statusWord(it.Status) + "**"}
+	if it.Template != "" {
+		meta = append(meta, it.Template)
+	}
+	if it.Assignee != "" {
+		meta = append(meta, "@"+it.Assignee)
+	}
+	if parent != nil {
+		meta = append(meta, parent.ID)
+	}
+	if r, t := it.CheckCounts(); t > 0 {
+		meta = append(meta, fmt.Sprintf("%d/%d checks", r, t))
+	}
+	if d, t := it.DeliverableCounts(); t > 0 {
+		meta = append(meta, fmt.Sprintf("%d/%d deliverables", d, t))
+	}
+	if len(it.Code) > 0 {
+		meta = append(meta, fmt.Sprintf("%d files", len(it.Code)))
+	}
+	if l := it.Links; l != nil && l.PRNumber > 0 {
+		meta = append(meta, fmt.Sprintf("⇡ #%d", l.PRNumber))
+	}
+	if age := Ago(it.Updated); age != "" {
+		meta = append(meta, age)
+	}
+	b.WriteString(strings.Join(meta, " · ") + "\n\n")
+	if it.Now != "" {
+		b.WriteString("**Now:** " + it.Now + "\n")
 	}
 	return b.String()
 }

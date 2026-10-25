@@ -46,8 +46,12 @@ type Model struct {
 	rows      []row
 	expanded  map[string]bool // tree items by ID, board sections by groupKey
 	board     bool            // left pane shows the status board instead of the tree
+	inbox     bool            // …narrowed to the review queues (board is set too)
+	reject    *rejectPrompt   // asking why a ticket is sent back, open while non-nil
 	cursor    int
 	offset    int
+	freeTree  bool // wheel-scrolled: offset no longer follows the cursor
+	density   density
 
 	ed        *editor
 	previewID string
@@ -61,6 +65,7 @@ type Model struct {
 	quitArmed bool
 	flash     string
 	pick      *picker // status picker, open while non-nil
+	find      *finder // fuzzy finder, open while non-nil
 
 	pulses   []live.Pulse // agents working right now
 	spinning bool         // the spinner timer is running
@@ -83,6 +88,7 @@ func New(s *store.Store, style string) *Model {
 		actor:    actor,
 		session:  journal.Session(actor.String()),
 		expanded: map[string]bool{},
+		density:  densityCompact,
 		ed:       newEditor(style),
 		keys:     defaultKeys(),
 		help:     help.New(),
@@ -129,6 +135,9 @@ func (m *Model) reload() {
 }
 
 func (m *Model) selected() *model.Item {
+	if m.find != nil {
+		return m.found()
+	}
 	if m.cursor >= 0 && m.cursor < len(m.rows) {
 		return m.rows[m.cursor].item
 	}
@@ -138,7 +147,11 @@ func (m *Model) selected() *model.Item {
 // rebuild recomputes visible rows, keeping the cursor on keepID if it is still visible.
 func (m *Model) rebuild(keepID string) {
 	if m.board {
-		m.rows = flattenBoard(m.items, m.expanded)
+		order := boardOrder
+		if m.inbox {
+			order = inboxOrder
+		}
+		m.rows = flattenBoard(m.items, m.expanded, order)
 	} else {
 		m.rows = flatten(m.items, m.expanded)
 	}
@@ -192,18 +205,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.ed.editing {
-			return m, nil
-		}
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
-			m.move(-1)
+			m.scrollTree(-1)
 		case tea.MouseButtonWheelDown:
-			m.move(1)
+			m.scrollTree(1)
 		}
 		return m, nil
 
 	case tea.KeyMsg:
+		m.freeTree = false // keys bring the selection back into view
 		if !m.conflict {
 			m.flash = ""
 		}
@@ -222,6 +233,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.pick != nil {
 			m.pickKey(msg)
+			return m, nil
+		}
+		if m.find != nil {
+			m.findKey(msg)
+			return m, nil
+		}
+		if m.reject != nil {
+			m.rejectKey(msg)
 			return m, nil
 		}
 		switch {
@@ -255,6 +274,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, m.keys.Board):
 			m.toggleBoard()
+			return m, nil
+		case key.Matches(msg, m.keys.Density):
+			m.density = m.density.next()
+			m.flash = "· tree: " + m.density.String()
+			m.rebuild(m.currentID())
+			return m, nil
+		case key.Matches(msg, m.keys.Find):
+			m.openFinder()
+			return m, nil
+		case key.Matches(msg, m.keys.Inbox):
+			m.toggleInbox()
+			return m, nil
+		case m.inbox && key.Matches(msg, m.keys.Approve):
+			m.approve()
+			return m, nil
+		case m.inbox && key.Matches(msg, m.keys.Reject):
+			m.openReject()
 			return m, nil
 		}
 		if m.focus == focusPreview {
@@ -298,6 +334,7 @@ func (m *Model) startEdit() {
 	m.focus = focusPreview
 	m.editID, m.editBase = it.ID, it.Body
 	m.conflict, m.quitArmed = false, false
+	m.ed.lead = "" // editing gets the pane; the review card returns after save/discard
 	m.layout()
 	m.ed.startEditing()
 }
@@ -379,6 +416,9 @@ func (m *Model) save(force bool) bool {
 	m.flash = "✓ saved " + cur.ID
 	if merged {
 		m.flash += " · kept new lines added on disk meanwhile"
+	}
+	if p := model.GoalProblem(cur); p != "" {
+		m.flash += " · ⚠ " + p
 	}
 	return true
 }
@@ -496,9 +536,20 @@ func (m *Model) move(delta int) {
 	m.refreshPreview()
 }
 
+// scrollTree moves the tree viewport without changing the selection.
+func (m *Model) scrollTree(delta int) {
+	m.offset += delta
+	m.freeTree = true
+	m.clampOffset()
+}
+
 func (m *Model) clampOffset() {
 	h := m.treeHeight()
 	if h <= 0 {
+		return
+	}
+	if m.freeTree {
+		m.offset = max(0, min(m.offset, max(0, len(m.rows)-h)))
 		return
 	}
 	if m.cursor < m.offset {
@@ -520,10 +571,14 @@ const (
 
 func (m *Model) helpKeys() help.KeyMap {
 	switch {
+	case m.find != nil:
+		return finderHelp{}
 	case m.ed.editing:
 		return vimHelp(m.ed.vim.mode)
 	case m.focus == focusPreview:
 		return previewKeys{m.keys}
+	case m.inbox:
+		return inboxKeys{m.keys}
 	}
 	return m.keys
 }
@@ -555,6 +610,12 @@ func (m *Model) refreshPreview() {
 		return
 	}
 	it := m.selected()
+	if m.find != nil && it == nil { // searching, nothing matches
+		m.ed.setDoc("", "_No matching items._", "", true)
+		m.ed.tail = nil
+		m.previewID = ""
+		return
+	}
 	if r, ok := m.current(); ok && it == nil { // a board section
 		m.ed.setDoc(m.groupDoc(r.group), "", "", r.key() != m.previewID)
 		m.ed.tail = nil
@@ -571,28 +632,32 @@ func (m *Model) refreshPreview() {
 	if it.Parent != "" {
 		parent = m.findItem(it.Parent)
 	}
-	header := render.DocHeader(it, parent, m.items...)
+	pinned := render.PreviewHeader(it, parent)
+	lead := ""
 	if e, ok := worklog.LastReview(journal.ForItem(m.events, it.ID)); ok {
-		header += render.ReviewCard(it, e)
+		lead = render.ReviewCard(it, e)
 	}
-	m.ed.setDoc(header, it.Body,
+	m.ed.setParts(pinned, lead, it.Body,
 		render.Sections(it, m.items, store.Children(m.items, it.ID)), it.ID != m.previewID)
-	m.ed.tail = worklog.Render(worklog.Build(journal.ForItem(m.events, it.ID)), m.ed.width, m.expandLog)
+	m.ed.tail = worklog.RenderOptions(worklog.Build(journal.ForItem(m.events, it.ID)), m.ed.width, worklog.Options{
+		ExpandAll:        m.expandLog,
+		HideSubmitDetail: it.Status == model.Review || it.Status == model.AgentReview,
+	})
 	m.previewID = it.ID
 }
 
 // View --------------------------------------------------------------------
 
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
-	editStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
-	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	normalBadge   = lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("6")).Foreground(lipgloss.Color("0"))
-	insertBadge   = lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("3")).Foreground(lipgloss.Color("0"))
-	focusedBorder = lipgloss.Color("6")
-	editBorder    = lipgloss.Color("3")
-	blurredBorder = lipgloss.Color("8")
+	titleStyle                           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "45"})
+	editStyle                            = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"})
+	errStyle                             = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"})
+	okStyle                              = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "78"})
+	normalBadge                          = lipgloss.NewStyle().Bold(true).Background(lipgloss.AdaptiveColor{Light: "37", Dark: "45"}).Foreground(lipgloss.AdaptiveColor{Light: "255", Dark: "0"})
+	insertBadge                          = lipgloss.NewStyle().Bold(true).Background(lipgloss.AdaptiveColor{Light: "136", Dark: "214"}).Foreground(lipgloss.AdaptiveColor{Light: "255", Dark: "0"})
+	focusedBorder lipgloss.TerminalColor = lipgloss.AdaptiveColor{Light: "30", Dark: "45"}
+	editBorder    lipgloss.TerminalColor = lipgloss.AdaptiveColor{Light: "136", Dark: "214"}
+	blurredBorder lipgloss.TerminalColor = lipgloss.AdaptiveColor{Light: "250", Dark: "240"}
 )
 
 func (m *Model) View() string {
@@ -608,8 +673,18 @@ func (m *Model) View() string {
 
 func (m *Model) headerView() string {
 	left := titleStyle.Render("⛰ Sherpa") + faint.Render(" · ") + m.store.Config.Name + faint.Render(" ("+m.store.Config.Key+")")
-	if m.board {
+	switch {
+	case m.inbox:
+		left += faint.Render(" · ") + titleStyle.Render("needs you")
+	case m.board:
 		left += faint.Render(" · ") + titleStyle.Render("board")
+	}
+	if n := m.needsYou(); n > 0 && !m.inbox && !m.ed.editing {
+		word := "need"
+		if n == 1 {
+			word = "needs"
+		}
+		left += faint.Render(" · ") + handStyle.Render(fmt.Sprintf("✋ %d %s you (n)", n, word))
 	}
 	if w := m.workingView(); w != "" && !m.ed.editing {
 		left += faint.Render(" · ") + w
@@ -646,7 +721,7 @@ func (m *Model) headerView() string {
 			if n := counts[st]; n > 0 {
 				label := fmt.Sprintf("%s %d", st.Glyph(), n)
 				if words {
-					label += " " + string(st)
+					label += " " + statusLabel(st)
 				}
 				parts = append(parts, render.StatusStyle(st).Render(label))
 			}
@@ -673,7 +748,7 @@ func (m *Model) headerView() string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-func (m *Model) panel(border lipgloss.Color, width int) lipgloss.Style {
+func (m *Model) panel(border lipgloss.TerminalColor, width int) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border).
@@ -683,6 +758,9 @@ func (m *Model) panel(border lipgloss.Color, width int) lipgloss.Style {
 }
 
 func (m *Model) treeView() string {
+	if m.find != nil {
+		return m.finderView()
+	}
 	h, w := m.treeHeight(), m.innerTreeW()
 	lines := make([]string, 0, h)
 	if len(m.rows) == 0 {
@@ -695,7 +773,7 @@ func (m *Model) treeView() string {
 			continue
 		}
 		r.spin = m.spinner(r.item.ID)
-		lines = append(lines, renderRow(r, m.expanded[r.key()], i == m.cursor, m.focus == focusTree, w))
+		lines = append(lines, renderRow(r, m.expanded[r.key()], i == m.cursor, m.focus == focusTree, w, m.density))
 	}
 	border := blurredBorder
 	if m.focus == focusTree {

@@ -20,7 +20,8 @@ import (
 // editable markdown while every other block stays rendered (Obsidian-style
 // live preview).
 type editor struct {
-	header, footer string   // read-only markdown around the body
+	header, footer string   // pinned header and read-only footer markdown
+	lead           string   // read-only markdown between the pinned header and body
 	tail           []string // pre-rendered lines after the footer (the worklog)
 	lines          []string // the body, one entry per source line
 
@@ -50,9 +51,9 @@ type snapshot struct {
 const maxUndo = 200
 
 var (
-	gutter            = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render("▎ ")
+	gutter            = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "45"}).Render("▎ ")
 	cursorStyle       = lipgloss.NewStyle().Reverse(true)
-	insertCursorStyle = lipgloss.NewStyle().Background(lipgloss.Color("3")).Foreground(lipgloss.Color("0"))
+	insertCursorStyle = lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Light: "136", Dark: "214"}).Foreground(lipgloss.AdaptiveColor{Light: "255", Dark: "0"})
 )
 
 func newEditor(style string) *editor {
@@ -61,7 +62,13 @@ func newEditor(style string) *editor {
 
 // setDoc replaces the content (outside edit mode). reset scrolls to the top.
 func (e *editor) setDoc(header, body, footer string, reset bool) {
-	e.header, e.footer = header, footer
+	e.setParts(header, "", body, footer, reset)
+}
+
+// setParts is setDoc with a scrollable lead block (the review card) between
+// the pinned header and the editable body.
+func (e *editor) setParts(header, lead, body, footer string, reset bool) {
+	e.header, e.lead, e.footer = header, lead, footer
 	e.lines = strings.Split(strings.TrimRight(body, "\n"), "\n")
 	if reset {
 		e.offset, e.row, e.col = 0, 0, 0
@@ -77,7 +84,11 @@ func (e *editor) resize(w, h int) {
 	e.width, e.height = w, h
 }
 
-func (e *editor) wrapWidth() int { return max(10, e.width-4) }
+// maxMeasure caps prose at a comfortable reading width even in a wide pane.
+// Tables, code fences and diagrams still use the full pane width.
+const maxMeasure = 88
+
+func (e *editor) wrapWidth() int { return min(max(10, e.width-4), maxMeasure) }
 
 // startEditing enters edit mode with the cursor on the first source line visible.
 func (e *editor) startEditing() {
@@ -225,9 +236,37 @@ func (e *editor) renderTableCached(src []string) ([]string, bool) {
 	return lines, true
 }
 
+// pinnedLines renders the read-only header once per width. It stays above
+// the scroll region so the ticket title and status never leave the screen.
+func (e *editor) pinnedLines() []string {
+	if strings.TrimSpace(e.header) == "" {
+		return nil
+	}
+	key := "pinned\x00" + strconv.Itoa(e.width) + "\x00" + e.header
+	if out, ok := e.cache[key]; ok {
+		return out
+	}
+	out := e.renderStatic(e.header)
+	e.cache[key] = out
+	return out
+}
+
+// pinnedHeight is the number of rows reserved for the header, including its
+// separator. A very tall header is capped at half the pane.
+func (e *editor) pinnedHeight() int {
+	n := len(e.pinnedLines())
+	if n == 0 {
+		return 0
+	}
+	return min(n, max(1, e.height/2)) + 1
+}
+
+// visibleHeight is how many rows remain for the scrollable body.
+func (e *editor) visibleHeight() int { return max(1, e.height-e.pinnedHeight()) }
+
 // layout builds every display line. cursorLine is the display line holding
 // the cursor (-1 outside edit mode); srcAt maps display line → source line
-// (-1 for header/footer lines).
+// (-1 for lead and footer lines).
 func (e *editor) layout() (out []string, cursorLine int, srcAt []int) {
 	cursorLine = -1
 	add := func(src int, ls ...string) {
@@ -236,8 +275,8 @@ func (e *editor) layout() (out []string, cursorLine int, srcAt []int) {
 			srcAt = append(srcAt, src)
 		}
 	}
-	if e.header != "" {
-		add(-1, e.renderMD(e.header)...)
+	if e.lead != "" {
+		add(-1, e.renderStatic(e.lead)...)
 		add(-1, "")
 	}
 	blocks := splitBlocks(e.lines)
@@ -334,37 +373,49 @@ func wrapRunes(runes []rune, w int) (chunks []chunk, cells int) {
 	return append(chunks, chunk{start, len(runes)}), cells
 }
 
-// View renders the visible window.
+// View renders the visible window: the pinned header first, then the
+// scrollable body, footer and worklog.
 func (e *editor) View() string {
 	out, _, _ := e.layout()
-	e.offset = max(0, min(e.offset, len(out)-e.height))
-	end := min(len(out), e.offset+e.height)
+	h := e.visibleHeight()
+	e.offset = max(0, min(e.offset, len(out)-h))
+	end := min(len(out), e.offset+h)
 	view := make([]string, 0, e.height)
 	for _, l := range out[e.offset:end] {
 		view = append(view, ansi.Truncate(l, e.width, ""))
 	}
-	return strings.Join(view, "\n")
+	body := strings.Join(view, "\n")
+	pin := e.pinnedLines()
+	if len(pin) == 0 {
+		return body
+	}
+	if maxPin := max(1, e.height/2); len(pin) > maxPin {
+		pin = append(append([]string{}, pin[:maxPin-1]...), faint.Render("…"))
+	}
+	return strings.Join(pin, "\n") + "\n\n" + body
 }
 
 // follow scrolls so the cursor stays visible, with a little context.
 func (e *editor) follow() {
 	out, cur, _ := e.layout()
-	if cur < 0 || e.height <= 0 {
+	h := e.visibleHeight()
+	if cur < 0 || h <= 0 {
 		return
 	}
-	margin := min(2, e.height/4)
+	margin := min(2, h/4)
 	if cur < e.offset+margin {
 		e.offset = cur - margin
 	}
-	if cur >= e.offset+e.height-margin {
-		e.offset = cur - e.height + margin + 1
+	if cur >= e.offset+h-margin {
+		e.offset = cur - h + margin + 1
 	}
-	e.offset = max(0, min(e.offset, len(out)-e.height))
+	e.offset = max(0, min(e.offset, len(out)-h))
 }
 
 func (e *editor) scroll(delta int) {
 	out, _, _ := e.layout()
-	e.offset = max(0, min(e.offset+delta, len(out)-e.height))
+	h := e.visibleHeight()
+	e.offset = max(0, min(e.offset+delta, len(out)-h))
 }
 
 func (e *editor) scrollTo(top bool) {
@@ -373,7 +424,7 @@ func (e *editor) scrollTo(top bool) {
 		return
 	}
 	out, _, _ := e.layout()
-	e.offset = max(0, len(out)-e.height)
+	e.offset = max(0, len(out)-e.visibleHeight())
 }
 
 // Editing -------------------------------------------------------------------

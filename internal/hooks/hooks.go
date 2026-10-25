@@ -120,11 +120,40 @@ func sessionContext(s *store.Store) string {
 	fmt.Fprintf(&b, "Sherpa tracks work in this repo (%s, key %s).\n", s.Config.Name, s.Config.Key)
 	if it := activeTicket(s); it != nil {
 		fmt.Fprintf(&b, "Active ticket in this checkout: %s %s. Keep working on it, logging as you go.\n", it.ID, it.Title)
-		for i, c := range it.Checks {
-			if !c.Resolved() {
-				fmt.Fprintf(&b, "  open check %d: %s\n", i+1, c.Text)
+		if d, t := it.DeliverableCounts(); t > 0 {
+			fmt.Fprintf(&b, "  deliverables %d/%d:\n", d, t)
+			for i, x := range it.Deliverables {
+				mark := "○"
+				if x.Done {
+					mark = "✓"
+				}
+				fmt.Fprintf(&b, "    %s %d. %s\n", mark, i+1, x.Text)
 			}
 		}
+		for i, c := range it.Checks {
+			if !c.Resolved() {
+				link := ""
+				if c.For > 0 {
+					link = fmt.Sprintf(" (deliverable %d)", c.For)
+				}
+				fmt.Fprintf(&b, "  open check %d: %s%s\n", i+1, c.Text, link)
+			}
+		}
+		if len(it.Code) > 0 {
+			fmt.Fprintf(&b, "  where:\n")
+			for i, c := range it.Code {
+				if i == 6 {
+					fmt.Fprintf(&b, "    … %d more\n", len(it.Code)-6)
+					break
+				}
+				line := "    " + c.Path
+				if len(c.Symbols) > 0 {
+					line += " (" + strings.Join(c.Symbols, ", ") + ")"
+				}
+				fmt.Fprintln(&b, line)
+			}
+		}
+		fmt.Fprintf(&b, "  brief: `shp brief %s` (outcome, deliverables, next check, code map)\n", it.ID)
 	} else {
 		b.WriteString("No ticket is claimed in this checkout. Claim one with `shp start <T-id>` before editing files (edits are blocked until you do).\n")
 	}
@@ -148,9 +177,10 @@ func sessionContext(s *store.Store) string {
 	list("In progress", model.InProgress, 8)
 	list("Ready to start", model.Ready, 8)
 	list("Awaiting agent review (if asked to review: shp review <id> --pass|--reject -m \"notes\")", model.AgentReview, 8)
-	b.WriteString(`Protocol: shp start <T-id> → shp log "headline" -f <file> (-k decision|verify|blocker, -d details) → ` +
-		`keep the ticket readable: shp now "one-line state", shp check <n> -e <evidence>, shp measure "<name>" <value> --target <goal> → ` +
-		`open the PR with gh pr create (Sherpa links it) → shp submit -m "what changed" --verified "how it was checked". ` +
+	b.WriteString(`Protocol: shp brief <T-id> → shp start <T-id> → shp log "headline" -f <file> (-k decision|verify|blocker, -d details) → ` +
+		`shp deliverable add "outcome", shp where add <file> --symbols <Type,Func> --deliverable N, shp check add --for N "…" → ` +
+		`shp now "one-line state", shp check <n> -e <evidence>, shp measure "<name>" <value> --target <goal> → ` +
+		`shp lint <T-id> → open the PR with gh pr create (Sherpa links it) → shp submit -m "what changed" --verified "how it was checked". ` +
 		`Never mark work done; never edit .sherpa/ by hand.`)
 	return b.String()
 }

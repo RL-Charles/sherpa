@@ -64,7 +64,8 @@ func (a *app) initCmd() *cobra.Command {
 
 func (a *app) newCmd() *cobra.Command {
 	var n store.NewItem
-	var checks []string
+	var checks, manualChecks, goals, deliverables []string
+	var template string
 	cmd := &cobra.Command{
 		Use:   "new <epic|story|ticket> <title...>",
 		Short: "Create an epic, story or ticket",
@@ -79,14 +80,54 @@ func (a *app) newCmd() *cobra.Command {
 			}
 			n.Kind = k
 			n.Title = strings.Join(args[1:], " ")
+			if template != "" && k != model.Ticket {
+				return errors.New("--template is for tickets; epics and stories have their own shape")
+			}
+			tplBody := ""
+			if template != "" {
+				var err error
+				if tplBody, err = model.TemplateBody(template); err != nil {
+					return err
+				}
+			}
+			if len(goals) > 0 {
+				if k != model.Epic {
+					return errors.New("--goal is for epics; stories and tickets use --check")
+				}
+				n.Description = strings.TrimSpace(n.Description + "\n\n" + model.GoalList(goals))
+			}
+			if k == model.Epic {
+				draft := &model.Item{ID: "the epic", Kind: k, Body: model.DefaultBody(k, n.Description)}
+				if p := model.GoalProblem(draft); p != "" {
+					return errors.New(p + `: add them with -g "…" -g "…"`)
+				}
+			}
 			it, err := a.store.Create(n)
 			if err != nil {
 				return err
 			}
-			if len(checks) > 0 {
+			changed := false
+			if template != "" {
+				it.Body = model.FillTemplate(tplBody, n.Description)
+				it.Template = strings.ToLower(strings.TrimSpace(template))
+				changed = true
+			}
+			for _, d := range deliverables {
+				if d = strings.TrimSpace(d); d != "" {
+					it.Deliverables = append(it.Deliverables, model.Deliverable{Text: d})
+					changed = true
+				}
+			}
+			if len(checks)+len(manualChecks) > 0 {
 				for _, c := range checks {
 					it.Checks = append(it.Checks, model.Check{Text: c})
 				}
+				for _, c := range manualChecks {
+					it.Checks = append(it.Checks, model.Check{Text: c, Manual: true})
+				}
+				changed = true
+			}
+			if changed {
 				if err := a.store.Save(it); err != nil {
 					return err
 				}
@@ -105,7 +146,11 @@ func (a *app) newCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&n.Description, "message", "m", "", "description (markdown)")
 	cmd.Flags().StringVar(&n.Priority, "priority", "", "p0-p3")
 	cmd.Flags().StringSliceVarP(&n.Labels, "label", "l", nil, "labels (repeatable)")
+	cmd.Flags().StringVar(&template, "template", "", "ticket body template: "+strings.Join(model.TemplateNames, ", "))
+	cmd.Flags().StringArrayVarP(&deliverables, "deliverable", "d", nil, "outcome the ticket delivers (repeatable)")
 	cmd.Flags().StringArrayVarP(&checks, "check", "c", nil, "acceptance check (repeatable)")
+	cmd.Flags().StringArrayVar(&manualChecks, "manual-check", nil, "check a human verifies by hand (repeatable)")
+	cmd.Flags().StringArrayVarP(&goals, "goal", "g", nil, fmt.Sprintf("epic deliverable, one bullet each (repeatable, at least %d)", model.MinGoals))
 	return cmd
 }
 
@@ -245,10 +290,11 @@ func (a *app) showCmd() *cobra.Command {
 			fmt.Print(render.Markdown(doc))
 			width := 100
 			if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 20 {
-				width = min(w, 120)
+				width = min(w, 100)
 			}
 			fmt.Println()
-			for _, l := range worklog.Render(sessions, width, expandAll) {
+			hideSubmit := it.Status == model.Review || it.Status == model.AgentReview
+			for _, l := range worklog.RenderOptions(sessions, width, worklog.Options{ExpandAll: expandAll, HideSubmitDetail: hideSubmit}) {
 				fmt.Println(l)
 			}
 			return nil
@@ -446,6 +492,9 @@ Agents must say how the work was verified.`,
 					return err
 				}
 			}
+			if to == model.AgentReview {
+				a.autoReview(it)
+			}
 			return a.done(it)
 		},
 	}
@@ -503,20 +552,41 @@ the agent as the actor and the human as the approver.`,
 
 func (a *app) reviewCmd() *cobra.Command {
 	var notes string
-	var pass, reject bool
+	var pass, reject, spawn bool
 	cmd := &cobra.Command{
 		Use:   "review <id> (--pass | --reject) -m \"notes\"",
 		Short: "Review work in agent review: pass it to human review, or send it back",
 		Long: `Review an item in agent_review, where agent submissions land. A human or
 another agent checks the work, then:
 
-  --pass    moves it to review, where a human signs it off
+  --pass    moves it to review, where a human signs it off, or straight
+            to done when .sherpa/policy.yaml allows it (see shp policy)
   --reject  sends it back to in_progress with what needs fixing
 
-Notes (-m) are required and go in the worklog. To close reviewed work
-outright, use shp done (agents need --approved-by <human>).`,
+  --spawn   launches the project's reviewer agent (reviewer.command in
+            .sherpa/config.yaml) to do the review in its own session
+
+Notes (-m) are required and go in the worklog. The session that submitted
+the work can't review it. To close reviewed work outright, use shp done
+(agents need --approved-by <human>).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if spawn {
+				if pass || reject {
+					return errors.New("--spawn launches a reviewer; it can't be combined with a verdict")
+				}
+				if err := a.load(); err != nil {
+					return err
+				}
+				it, err := a.store.Get(args[0])
+				if err != nil {
+					return err
+				}
+				if it.Status != model.AgentReview {
+					return fmt.Errorf("%s is %s; reviewers are for items in agent_review", it.ID, it.Status)
+				}
+				return a.launchReviewer(it)
+			}
 			if pass == reject {
 				return errors.New("give exactly one of --pass or --reject")
 			}
@@ -533,16 +603,29 @@ outright, use shp done (agents need --approved-by <human>).`,
 			if it.Status != model.AgentReview {
 				return fmt.Errorf("%s is %s; shp review is for items in agent_review", it.ID, it.Status)
 			}
+			if err := a.selfReview(it.ID); err != nil {
+				return err
+			}
 			to, verdict := model.Review, "pass"
 			if reject {
 				to, verdict = model.InProgress, "reject"
 			}
-			from, err := a.setStatus(it, to)
+			rule, err := a.policyClose(it, pass)
+			if err != nil {
+				return err
+			}
+			var from model.Status
+			if rule != "" { // the project's policy closes it; no human gate
+				from, it.Status, to = it.Status, model.Done, model.Done
+				err = a.store.Save(it)
+			} else {
+				from, err = a.setStatus(it, to)
+			}
 			if err != nil {
 				return err
 			}
 			if err := a.record(journal.Event{Item: it.ID, Type: "review", Kind: verdict, From: string(from), To: string(to),
-				Message: notes, Commit: gitinfo.Head(a.store.CodeRoot)}); err != nil {
+				Message: notes, ApprovedBy: rule, Commit: gitinfo.Head(a.store.CodeRoot)}); err != nil {
 				return err
 			}
 			return a.done(it)
@@ -551,6 +634,7 @@ outright, use shp done (agents need --approved-by <human>).`,
 	cmd.Flags().StringVarP(&notes, "message", "m", "", "review notes (required)")
 	cmd.Flags().BoolVar(&pass, "pass", false, "send it on to human review")
 	cmd.Flags().BoolVar(&reject, "reject", false, "send it back to in progress")
+	cmd.Flags().BoolVar(&spawn, "spawn", false, "launch the configured reviewer agent instead")
 	return cmd
 }
 
@@ -599,6 +683,7 @@ func (a *app) contextCmd() *cobra.Command {
 			fmt.Printf("Sherpa · %s (%s) · you are %s\n\n", a.store.Config.Name, a.store.Config.Key, a.actor)
 			if active != nil {
 				fmt.Println("Active:", render.Line(active))
+				fmt.Printf("  brief: `shp brief %s` gives the outcome, deliverables, next check and code map.\n", active.ID)
 			} else {
 				fmt.Println("Active: none — claim one with `shp start <id>`")
 			}
@@ -693,6 +778,9 @@ func (a *app) editCmd() *cobra.Command {
 					return errors.New("refusing to replace the body with empty stdin")
 				}
 				it.Body = string(data)
+				if p := model.GoalProblem(it); p != "" {
+					return errors.New(p)
+				}
 				if err := a.store.Save(it); err != nil {
 					return err
 				}
@@ -718,7 +806,13 @@ func (a *app) editCmd() *cobra.Command {
 			if err := a.store.Save(edited); err != nil {
 				return err
 			}
-			return a.record(journal.Event{Item: it.ID, Type: "edit"})
+			if err := a.record(journal.Event{Item: it.ID, Type: "edit"}); err != nil {
+				return err
+			}
+			if p := model.GoalProblem(edited); p != "" {
+				return errors.New(p + " · saved anyway, run shp edit " + it.ID + " again to fix it")
+			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&fromStdin, "stdin", false, "replace the body with markdown read from stdin")
@@ -735,10 +829,9 @@ func (a *app) done(it *model.Item) error {
 }
 
 func (a *app) migrateCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "migrate",
-		Short:  "Upgrade .sherpa data to the current format (idempotent)",
-		Hidden: true,
+	cmd := &cobra.Command{
+		Use:   "migrate",
+		Short: "Upgrade .sherpa data to the current format (idempotent)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := a.load(); err != nil {
 				return err
@@ -766,6 +859,8 @@ func (a *app) migrateCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.AddCommand(a.migrateBriefCmd())
+	return cmd
 }
 
 func (a *app) importCmd() *cobra.Command {
@@ -859,14 +954,41 @@ func reviewWarnings(it *model.Item) []string {
 	if it.Links == nil || it.Links.PR == "" {
 		w = append(w, "⚠ no PR linked: open one with `gh pr create` (Sherpa links it), or run `shp sync` after it exists")
 	}
-	if r, t := it.CheckCounts(); r < t {
-		var open []string
-		for i, c := range it.Checks {
-			if !c.Resolved() {
-				open = append(open, fmt.Sprintf("%d %s", i+1, c.Text))
+	var open, hand []string
+	for i, c := range it.Checks {
+		switch {
+		case c.Resolved():
+		case c.Manual: // not the agent's to tick: a human verifies these
+			hand = append(hand, fmt.Sprintf("%d %s", i+1, c.Text))
+		default:
+			open = append(open, fmt.Sprintf("%d %s", i+1, c.Text))
+		}
+	}
+	if len(open) > 0 {
+		r, t := it.CheckCounts()
+		w = append(w, fmt.Sprintf("⚠ checks %d/%d: unresolved %s", r, t, strings.Join(open, "; ")))
+	}
+	if len(hand) > 0 {
+		w = append(w, "✋ for a human to verify: "+strings.Join(hand, "; "))
+	}
+	if len(it.Deliverables) == 0 {
+		if it.Template != "spike" {
+			w = append(w, "⚠ no deliverables: state the outcomes with `shp deliverable add …`")
+		}
+	} else {
+		for i := range it.Deliverables {
+			if len(it.ChecksFor(i+1)) == 0 {
+				w = append(w, fmt.Sprintf("⚠ deliverable %d has no check: `shp check add --for %d …`", i+1, i+1))
 			}
 		}
-		w = append(w, fmt.Sprintf("⚠ checks %d/%d: unresolved %s", r, t, strings.Join(open, "; ")))
+	}
+	for i, c := range it.Checks {
+		if c.For < 0 || c.For > len(it.Deliverables) {
+			w = append(w, fmt.Sprintf("⚠ check %d points at deliverable %d, but there are %d", i+1, c.For, len(it.Deliverables)))
+		}
+	}
+	if it.Template != "spike" && len(it.Code) == 0 {
+		w = append(w, "⚠ no code map: `shp where add <path> --symbols … --deliverable N`")
 	}
 	for _, m := range it.Measures {
 		if met, known := m.Met(); known && !met {

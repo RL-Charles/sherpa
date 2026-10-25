@@ -33,6 +33,18 @@ type app struct {
 
 func Execute() error {
 	a := &app{}
+	err := newRoot(a).Execute()
+	if err != nil {
+		if a.json {
+			_ = json.NewEncoder(os.Stderr).Encode(map[string]string{"error": err.Error()})
+		} else {
+			fmt.Fprintln(os.Stderr, CommandName(os.Args[0])+":", err)
+		}
+	}
+	return err
+}
+
+func newRoot(a *app) *cobra.Command {
 	root := &cobra.Command{
 		Use:           CommandName(os.Args[0]),
 		Short:         "Sherpa — tickets and progress tracking for humans and agents",
@@ -64,6 +76,7 @@ func Execute() error {
 		a.doneCmd(),
 		a.reviewCmd(),
 		a.contextCmd(),
+		a.briefCmd(),
 		a.activityCmd(),
 		a.editCmd(),
 		a.migrateCmd(),
@@ -73,21 +86,19 @@ func Execute() error {
 		a.nowCmd(),
 		a.checkCmd(),
 		a.checksCmd(),
+		a.deliverableCmd(),
+		a.whereCmd(),
+		a.designCmd(),
 		a.measureCmd(),
 		a.visualCmd(),
 		a.dependsCmd(),
+		a.lintCmd(),
 		a.syncCmd(),
 		a.backfillCmd(),
+		a.searchCmd(),
+		a.policyCmd(),
 	)
-	err := root.Execute()
-	if err != nil {
-		if a.json {
-			_ = json.NewEncoder(os.Stderr).Encode(map[string]string{"error": err.Error()})
-		} else {
-			fmt.Fprintln(os.Stderr, CommandName(os.Args[0])+":", err)
-		}
-	}
-	return err
+	return root
 }
 
 // load opens the store from the working directory and identifies the actor.

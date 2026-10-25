@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -38,11 +39,17 @@ func boardTickets(items []*model.Item, st model.Status) []*model.Item {
 	return out
 }
 
-// flattenBoard lists every status section, with its tickets when expanded.
-func flattenBoard(items []*model.Item, expanded map[string]bool) []row {
+// flattenBoard lists every status section in order, with its tickets when
+// expanded.
+func flattenBoard(items []*model.Item, expanded map[string]bool, order []model.Status) []row {
 	var rows []row
-	for _, st := range boardOrder {
+	for _, st := range order {
 		tickets := boardTickets(items, st)
+		if st == model.Review { // hand checks first: they are what only a human can do
+			slices.SortStableFunc(tickets, func(a, b *model.Item) int {
+				return len(b.OpenManual()) - len(a.OpenManual())
+			})
+		}
 		rows = append(rows, row{group: st, count: len(tickets), hasKids: len(tickets) > 0})
 		if expanded[groupKey(st)] {
 			for _, it := range tickets {
@@ -100,7 +107,7 @@ func (m *Model) groupDoc(st model.Status) string {
 }
 
 func (m *Model) toggleBoard() {
-	m.board = !m.board
+	m.board, m.inbox = !m.board, false
 	m.offset = 0
 	m.rebuild(m.currentID())
 }

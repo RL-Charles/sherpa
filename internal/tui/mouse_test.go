@@ -96,3 +96,25 @@ func TestClickWorklogHeaderToggles(t *testing.T) {
 		t.Fatalf("session header click should expand the worklog without editing: expandLog=%v editing=%v", m.expandLog, m.ed.editing)
 	}
 }
+
+func TestWheelScrollsTreeWithoutMovingSelection(t *testing.T) {
+	m := fixture(t)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 6})
+	if h := m.treeHeight(); h >= len(m.rows) {
+		t.Fatalf("tree must overflow to scroll: height %d, rows %d", h, len(m.rows))
+	}
+	wheel := func(b tea.MouseButton) { m.Update(tea.MouseMsg{X: 5, Y: contentTop, Button: b}) }
+	wheel(tea.MouseButtonWheelDown)
+	wheel(tea.MouseButtonWheelDown)
+	if m.cursor != 0 || m.offset != 2 {
+		t.Fatalf("wheel down twice: want cursor 0 offset 2, got cursor %d offset %d", m.cursor, m.offset)
+	}
+	m.reloadKeep() // the auto-reload tick must not snap back to the selection
+	if m.offset != 2 {
+		t.Fatalf("reload snapped offset to %d", m.offset)
+	}
+	press(m, "j")
+	if m.cursor != 1 || m.offset != 1 {
+		t.Fatalf("j after scrolling: want cursor 1 in view at offset 1, got cursor %d offset %d", m.cursor, m.offset)
+	}
+}

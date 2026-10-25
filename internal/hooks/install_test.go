@@ -26,6 +26,32 @@ func states(rs []Result) map[string]string {
 	return m
 }
 
+func TestProtocolUpgradePreservesOtherSections(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "AGENTS.md")
+	old := "# Agents\n\n## Work tracking (Sherpa)\n\n1. shp start <T-id> before editing.\n\n## House rules\n\n- keep this\n"
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first := states(Install(root, nil, false, true))
+	if first["docs:AGENTS.md"] != "updated" {
+		t.Fatalf("old protocol should update: %v", first)
+	}
+	data, _ := os.ReadFile(path)
+	for _, want := range []string{"shp brief", "shp where add", "## House rules", "- keep this"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("upgraded AGENTS.md missing %q:\n%s", want, data)
+		}
+	}
+	if strings.Count(string(data), protocolHeading) != 1 {
+		t.Errorf("protocol heading should appear once:\n%s", data)
+	}
+	second := states(Install(root, nil, false, true))
+	if second["docs:AGENTS.md"] != "unchanged" {
+		t.Fatalf("second install should be idempotent: %v", second)
+	}
+}
+
 func TestInstallPreservesAndIsIdempotent(t *testing.T) {
 	root := gitInit(t)
 	existing := `{"model":"opus","hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"my-guard.sh"}]}]}}`
