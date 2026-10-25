@@ -54,6 +54,11 @@ All notable changes to Sherpa are recorded here. The format follows
 - MIT license, contributing guide, code of conduct, security policy, CI and release builds.
 
 ### Changed
+- Closure policy: an agent may close a **ticket** once it has been submitted and every
+  deliverable and check is resolved; no human approval is required (`--approved-by` is optional
+  audit). **Stories and epics** are human-only and cannot be closed by an agent, even with an
+  approver. `auto_done` policy now requires a ticket, a completed deliverable set and resolved
+  checks, and never auto-closes a story or epic.
 - TUI readability pass: title-first rows with right-aligned checks, age and PR metadata (`v` cycles
   minimal/compact/labelled), a pinned title/status strip, capped prose width, section rules, an
   adaptive light/dark palette and a status-coloured selection gutter.

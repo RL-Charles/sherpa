@@ -509,12 +509,15 @@ func (a *app) doneCmd() *cobra.Command {
 	var note, approver string
 	cmd := &cobra.Command{
 		Use:   "done <id>",
-		Short: "Mark an item done (humans, or agents with --approved-by)",
+		Short: "Mark an item done (tickets: agents when ready; stories/epics: humans)",
 		Long: `Mark an item done.
 
-Agents may only close items in review, and only when a human has explicitly
-told them to: pass that human's name with --approved-by. The journal records
-the agent as the actor and the human as the approver.`,
+Tickets: an agent may close a ticket once it has been submitted for review and
+every deliverable and check is resolved. No human approval is required. Pass
+--approved-by to record a human who asked for the close.
+
+Stories and epics: only a human can close these after review. Agents cannot
+close them, even with --approved-by.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := a.load(); err != nil {
@@ -524,13 +527,7 @@ the agent as the actor and the human as the approver.`,
 			if err != nil {
 				return err
 			}
-			if approver == "" {
-				if err := a.transition(it, model.Done, note); err != nil {
-					return err
-				}
-				return a.done(it)
-			}
-			if err := workflow.CheckApprovedDone(a.actor, it, approver); err != nil {
+			if err := workflow.CheckDone(a.actor, it); err != nil {
 				return err
 			}
 			from := it.Status
@@ -546,7 +543,7 @@ the agent as the actor and the human as the approver.`,
 		},
 	}
 	cmd.Flags().StringVarP(&note, "message", "m", "", "note for the worklog")
-	cmd.Flags().StringVar(&approver, "approved-by", "", "human who explicitly approved closing it (required for agents)")
+	cmd.Flags().StringVar(&approver, "approved-by", "", "optional human to record as the approver")
 	return cmd
 }
 
@@ -559,16 +556,16 @@ func (a *app) reviewCmd() *cobra.Command {
 		Long: `Review an item in agent_review, where agent submissions land. A human or
 another agent checks the work, then:
 
-  --pass    moves it to review, where a human signs it off, or straight
-            to done when .sherpa/policy.yaml allows it (see shp policy)
+  --pass    moves it to review for a human look, or straight to done
+            when .sherpa/policy.yaml allows it (tickets only; see shp policy)
   --reject  sends it back to in_progress with what needs fixing
 
   --spawn   launches the project's reviewer agent (reviewer.command in
             .sherpa/config.yaml) to do the review in its own session
 
 Notes (-m) are required and go in the worklog. The session that submitted
-the work can't review it. To close reviewed work outright, use shp done
-(agents need --approved-by <human>).`,
+the work can't review it. To close a ticket outright, use shp done once its
+deliverables and checks are resolved; stories and epics are human-only.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if spawn {

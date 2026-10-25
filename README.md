@@ -17,7 +17,7 @@ know what was done, by whom, and against which commit.
 - **Epic → story → ticket.** A tree view with live status, progress and colour.
 - **Rendered markdown.** Headings, checklists, code, text trees and fully boxed tables, right in the terminal.
 - **Obsidian-style editing, with vim keys.** Press `e`: the block under your cursor turns into raw markdown and everything else stays rendered.
-- **Built for agents.** Agents claim tickets, log typed entries and submit with how the work was verified. Only a human can mark work done.
+- **Built for agents.** Agents claim tickets, log typed entries and submit with how the work was verified. A ticket can close when its deliverables and checks are complete; stories and epics need human approval.
 - **A readable worklog.** Generated from the journal and grouped into work sessions, with commit ranges and line counts.
 - **Live.** The TUI picks up agent activity every two seconds.
 
@@ -89,7 +89,7 @@ shp log "Add refresh endpoint" -f api/auth.go
 shp log -k decision "Rotate on use, not on a timer" -d "Simpler revocation"
 shp submit -m "Refresh endpoint" --verified "go test ./auth"   # agents → agent review
 shp review T-0001 --pass -m "Checked diff and tests"           # agent review → review (--reject: back to in progress)
-shp done T-0001            # humans; agents add --approved-by <human>
+shp done T-0001            # tickets: agents when deliverables + checks are complete
 shp activity               # audit trail across all items
 ```
 
@@ -108,12 +108,15 @@ Add this to your agent instructions (`CLAUDE.md`, `AGENTS.md`, …):
 5. Run `shp lint <T-id>`; fix missing context, deliverables, evidence or code-map entries.
 6. Finish with `shp submit -m "what changed" --verified "how it was checked"`. It lands in agent review.
 7. When asked to review agent work: `shp review <id> --pass -m "…"` (on to human review) or `--reject -m "…"`.
-8. Only mark work done when a human explicitly tells you to: `shp done <id> --approved-by <name>`.
+8. Close a ticket when every deliverable and check is resolved: `shp done <T-id>` (no human approval needed). Stories and epics are closed by a human after review; agents cannot close them.
 ```
 
-Agent work passes two gates: **agent review**, where a human or another agent checks it and
-passes it on or sends it back, then **review**, where a human signs it off. A human can also close
-work straight from agent review.
+Tickets close on evidence, not on a click: once a ticket has been submitted and every deliverable
+and check is resolved, an agent may run `shp done <T-id>`. No approver is required. Agent review
+and `shp review` remain available for a second look, and a human can close at any time.
+
+Stories and epics are different: only a human can close them, after reviewing the work beneath
+them. Agents cannot close a story or epic, even with `--approved-by`.
 
 The session that submitted the work can't review it. To have another agent do it automatically,
 configure a reviewer: a shell command that reads the review prompt on stdin.
@@ -128,8 +131,8 @@ reviewer:
 The reviewer runs detached as `agent:reviewer` in its own session, logs to
 `.sherpa/.local/reviews/<id>.log`, and ends with `shp review --pass` or `--reject`.
 
-Low-risk work can skip the human gate. `.sherpa/policy.yaml` lists what a passing agent review
-may close outright; anything with an unresolved check still goes to a human. `shp policy <id>`
+Low-risk tickets can still be closed by a passing agent review. `.sherpa/policy.yaml` lists which
+ones; anything with an unresolved deliverable or check still goes to a human. `shp policy <id>`
 explains the decision.
 
 ```yaml
@@ -142,11 +145,12 @@ auto_done:
 ```
 
 Some checks only a human can make (how it looks, how it feels, a real device). Agents add them with
-`shp check add --manual "…" --how "steps"`; they show as ✋, and only humans tick them.
+`shp check add --manual "…" --how "steps"`; they show as ✋, and only humans tick them. An agent
+cannot close a ticket while a manual check is open.
 
 Sherpa enforces the important parts: agents can't log to a ticket they haven't claimed, can't
-submit without saying how the work was verified, and can only close reviewed work with a named
-human approver, which the audit log records alongside the agent. Claude Code is
+submit without saying how the work was verified, can't close a ticket with an open deliverable or
+check, and can't close a story or epic at all. Claude Code is
 detected automatically (`CLAUDECODE=1`); for other agents, set `SHERPA_ACTOR=agent:<name>`.
 
 Agents working in git worktrees (`git worktree add`, Claude Code's `.claude/worktrees/`) all

@@ -317,7 +317,7 @@ func CodeMap(it *model.Item) string {
 		return filepath.ToSlash(refs[i].Path) < filepath.ToSlash(refs[j].Path)
 	})
 
-	changeW, pathW, symW := 0, 0, 0
+	changeW, pathW := 0, 0
 	label := func(c string) string {
 		switch strings.ToLower(strings.TrimSpace(c)) {
 		case "add", "added", "new":
@@ -341,13 +341,6 @@ func CodeMap(it *model.Item) string {
 		if n := len(name); n > pathW {
 			pathW = n
 		}
-		s := "-"
-		if len(r.Symbols) > 0 {
-			s = strings.Join(r.Symbols, ", ")
-		}
-		if n := len(s); n > symW {
-			symW = n
-		}
 	}
 
 	var b strings.Builder
@@ -369,12 +362,7 @@ func CodeMap(it *model.Item) string {
 		if r.Lines != "" {
 			name += ":" + r.Lines
 		}
-		symbols := "-"
-		if len(r.Symbols) > 0 {
-			symbols = strings.Join(r.Symbols, ", ")
-		}
-		fmt.Fprintf(&b, "  %-*s  %-*s  %-*s", changeW, label(r.Change), pathW, name, symW, symbols)
-
+		fmt.Fprintf(&b, "  %-*s  %-*s", changeW, label(r.Change), pathW, name)
 		var tail []string
 		if r.Deliverable > 0 {
 			tail = append(tail, fmt.Sprintf("deliver %d", r.Deliverable))
@@ -384,10 +372,13 @@ func CodeMap(it *model.Item) string {
 			state = "planned"
 		}
 		tail = append(tail, state)
-		if r.Note != "" {
-			tail = append(tail, r.Note)
-		}
 		b.WriteString("  " + strings.Join(tail, " · ") + "\n")
+		if len(r.Symbols) > 0 {
+			b.WriteString("    symbols: " + strings.Join(r.Symbols, ", ") + "\n")
+		}
+		if r.Note != "" {
+			b.WriteString("    note: " + r.Note + "\n")
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

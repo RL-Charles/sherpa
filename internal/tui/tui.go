@@ -150,8 +150,10 @@ func (m *Model) rebuild(keepID string) {
 		order := boardOrder
 		if m.inbox {
 			order = inboxOrder
+			m.rows = flattenInbox(m.items, m.expanded, order)
+		} else {
+			m.rows = flattenBoard(m.items, m.expanded, order)
 		}
-		m.rows = flattenBoard(m.items, m.expanded, order)
 	} else {
 		m.rows = flatten(m.items, m.expanded)
 	}

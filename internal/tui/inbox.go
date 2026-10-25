@@ -17,11 +17,11 @@ import (
 // Needs-you inbox -------------------------------------------------------------
 //
 // `n` narrows the board to the review queues, human review first and, within
-// it, tickets with ✋ manual checks first:
+// it, items with ✋ manual checks first:
 //
 //	▾ ◑ Review 3
 //	    ◑ T-0061 ✋ Manual checks…        a  approve → done (ticks its ✋ checks)
-//	    ◑ T-0059 Fuzzy search…            x  send back with a note
+//	    ◑ S-004 Browse view…              x  send back with a note
 //	▾ ◒ Agent review 2
 //
 // The header counts what waits for a human from every view.
@@ -33,11 +33,13 @@ type rejectPrompt struct {
 	note string
 }
 
-// needsYou counts tickets waiting for a human sign-off.
+// needsYou counts items waiting for a human sign-off. Tickets wait for a
+// review sign-off; stories and epics are human-only closures.
 func (m *Model) needsYou() int {
 	n := 0
 	for _, it := range m.items {
-		if it.Kind == model.Ticket && it.Status == model.Review {
+		if it.Status == model.Review &&
+			(it.Kind == model.Ticket || it.Kind == model.Story || it.Kind == model.Epic) {
 			n++
 		}
 	}
@@ -60,11 +62,11 @@ func (m *Model) toggleInbox() {
 	}
 }
 
-// reviewable returns the selected ticket if it waits for review.
+// reviewable returns the selected item if it waits for review.
 func (m *Model) reviewable() *model.Item {
 	it := m.selected()
 	if it == nil {
-		m.flash = "· pick a ticket"
+		m.flash = "· pick an item"
 		return nil
 	}
 	if it.Status != model.Review && it.Status != model.AgentReview {
@@ -74,7 +76,7 @@ func (m *Model) reviewable() *model.Item {
 	return it
 }
 
-// approve closes the selected ticket. Approving is the human's sign-off, so
+// approve closes the selected item. Approving is the human's sign-off, so
 // it ticks the ✋ checks still open, naming who verified them.
 func (m *Model) approve() {
 	it := m.reviewable()

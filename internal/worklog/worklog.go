@@ -185,7 +185,7 @@ func describe(e journal.Event, hideSubmit bool) (icon, color, headline string, d
 			if e.ApprovedBy != "" {
 				return "●", "green", "approved by " + e.ApprovedBy + " · done", detail
 			}
-			return "●", "green", "approved · done", detail
+			return "●", "green", "closed · done", detail
 		case "blocked":
 			return "⛔", "red", "blocked", detail
 		case "ready":
@@ -459,14 +459,15 @@ func wrap(s string, w int) []string {
 	return strings.Split(ansi.Wordwrap(s, w, ""), "\n")
 }
 
-// routine entries fold away in highlight view: plain progress notes and edits.
-// Decisions, verifications, blockers, checks, links, status changes and
-// submits always show.
+// routine entries fold away in highlight view: plain progress notes, edits,
+// and structural code-map updates (the map itself is rendered above the log).
+// Decisions, verifications, blockers, checks, links, deliverables, status
+// changes and submits always show.
 func routine(e journal.Event) bool {
 	switch e.Type {
 	case "log":
 		return e.Kind == "" || e.Kind == journal.KindProgress
-	case "edit", "create":
+	case "edit", "create", "where":
 		return true
 	}
 	return false

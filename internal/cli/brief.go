@@ -306,7 +306,7 @@ func sectionLines(body, name string, max int, keepHeadings bool) []string {
 		}
 		t = strings.TrimPrefix(t, "- ")
 		t = strings.TrimPrefix(t, "* ")
-		out = append(out, truncateText(t, 140))
+		out = append(out, truncateText(t, 300))
 		if len(out) >= max {
 			break
 		}

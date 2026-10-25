@@ -39,20 +39,43 @@ func boardTickets(items []*model.Item, st model.Status) []*model.Item {
 	return out
 }
 
+// inboxItems includes stories and epics: their closure is the human review
+// step, so they belong in the needs-you queue too.
+func inboxItems(items []*model.Item, st model.Status) []*model.Item {
+	var out []*model.Item
+	for _, it := range items {
+		if it.Status == st && (it.Kind == model.Ticket || it.Kind == model.Story || it.Kind == model.Epic) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 // flattenBoard lists every status section in order, with its tickets when
-// expanded.
+// expanded. flattenInbox does the same for every item kind.
 func flattenBoard(items []*model.Item, expanded map[string]bool, order []model.Status) []row {
+	return flattenGroups(items, expanded, order, false)
+}
+
+func flattenInbox(items []*model.Item, expanded map[string]bool, order []model.Status) []row {
+	return flattenGroups(items, expanded, order, true)
+}
+
+func flattenGroups(items []*model.Item, expanded map[string]bool, order []model.Status, inbox bool) []row {
 	var rows []row
 	for _, st := range order {
-		tickets := boardTickets(items, st)
+		group := boardTickets(items, st)
+		if inbox {
+			group = inboxItems(items, st)
+		}
 		if st == model.Review { // hand checks first: they are what only a human can do
-			slices.SortStableFunc(tickets, func(a, b *model.Item) int {
+			slices.SortStableFunc(group, func(a, b *model.Item) int {
 				return len(b.OpenManual()) - len(a.OpenManual())
 			})
 		}
-		rows = append(rows, row{group: st, count: len(tickets), hasKids: len(tickets) > 0})
+		rows = append(rows, row{group: st, count: len(group), hasKids: len(group) > 0})
 		if expanded[groupKey(st)] {
-			for _, it := range tickets {
+			for _, it := range group {
 				rows = append(rows, row{item: it, depth: 1})
 			}
 		}
@@ -85,16 +108,22 @@ func renderGroup(r row, expanded, selected, focused bool, width int) string {
 	return line + strings.Repeat(" ", max(0, width-ansi.StringWidth(line)))
 }
 
-// groupDoc is the preview for a selected section: its tickets as a list.
+// groupDoc is the preview for a selected section: its items as a list.
 func (m *Model) groupDoc(st model.Status) string {
-	tickets := boardTickets(m.items, st)
+	items := boardTickets(m.items, st)
+	if m.inbox {
+		items = inboxItems(m.items, st)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s %s\n\n", st.Glyph(), strings.ToUpper(statusLabel(st)[:1])+statusLabel(st)[1:])
-	if len(tickets) == 0 {
-		b.WriteString("_No tickets._\n")
+	if len(items) == 0 {
+		b.WriteString("_No items._\n")
 	}
-	for _, it := range tickets {
+	for _, it := range items {
 		fmt.Fprintf(&b, "- **%s** %s", it.ID, it.Title)
+		if it.Kind != model.Ticket {
+			fmt.Fprintf(&b, " · _%s_", it.Kind)
+		}
 		if it.Assignee != "" {
 			fmt.Fprintf(&b, " · @%s", it.Assignee)
 		}

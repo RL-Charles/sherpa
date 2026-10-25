@@ -172,7 +172,13 @@ func TestPolicyClosesOnPass(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.Dir, "policy.yaml"), []byte("auto_done:\n  - name: low-risk\n    under: [S-001]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := shp(t, "agent:claude", "check", "add", "-t", "T-0001", "--manual", "eyeball"); err != nil {
+	if err := shp(t, "agent:claude", "deliverable", "add", "-t", "T-0001", "outcome"); err != nil {
+		t.Fatal(err)
+	}
+	if err := shp(t, "agent:claude", "deliverable", "done", "1", "-t", "T-0001", "-e", "tests"); err != nil {
+		t.Fatal(err)
+	}
+	if err := shp(t, "agent:claude", "check", "add", "-t", "T-0001", "--for", "1", "--manual", "eyeball"); err != nil {
 		t.Fatal(err)
 	}
 	submitAsAgent(t)

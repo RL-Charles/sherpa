@@ -101,8 +101,10 @@ ticket also requires --all.
 			}
 
 			var changes []briefChange
+			gaps := 0
 			for _, it := range items {
 				ch := migrateOneBrief(it, events, opts)
+				gaps += len(ch.RemainingGaps)
 				if ch.Deliverable == "" && len(ch.Files) == 0 && ch.Template == "" && !ch.Description && ch.Now == "" {
 					continue
 				}
@@ -121,7 +123,7 @@ ticket also requires --all.
 			if a.json {
 				return a.emit(changes)
 			}
-			printBriefChanges(changes, write)
+			printBriefChanges(changes, write, gaps)
 			return nil
 		},
 	}
@@ -284,9 +286,13 @@ func briefChangeMessage(ch briefChange) string {
 	return "brief backfill: " + strings.Join(parts, ", ")
 }
 
-func printBriefChanges(changes []briefChange, wrote bool) {
+func printBriefChanges(changes []briefChange, wrote bool, gaps int) {
 	if len(changes) == 0 {
-		fmt.Println("No mechanical brief changes. Remaining prose gaps are listed by `shp lint`.")
+		if gaps == 0 {
+			fmt.Println("No mechanical changes; the brief is lint-clean.")
+		} else {
+			fmt.Printf("No mechanical changes; %d prose gap%s remain. Run `shp lint`.\n", gaps, plural(gaps))
+		}
 		return
 	}
 	for _, ch := range changes {
@@ -334,7 +340,9 @@ func printBriefChanges(changes []briefChange, wrote bool) {
 	fmt.Printf("%d ticket%s %s. ", len(changes), plural(len(changes)), verb)
 	if !wrote {
 		fmt.Println("Re-run with the same IDs and --write to apply the mechanical fields.")
+	} else if gaps > 0 {
+		fmt.Printf("Prose gaps still need a human or an agent (%d). `shp lint --strict`.\n", gaps)
 	} else {
-		fmt.Println("Prose gaps still need a human or an agent: `shp lint --strict`.")
+		fmt.Println("No prose gaps remain.")
 	}
 }

@@ -72,7 +72,10 @@ func CheckTransition(a Actor, it *model.Item, to model.Status) error {
 	}
 	if a.Kind == Agent {
 		if to == model.Done {
-			return fmt.Errorf("agents cannot mark %s done; use `shp submit`, then `shp done --approved-by <human>` once a human approves", it.ID)
+			if it.Kind == model.Ticket {
+				return fmt.Errorf("agents close tickets with `shp done %s` once all deliverables and checks are resolved", it.ID)
+			}
+			return fmt.Errorf("%s is a %s: only a human can close stories and epics after review", it.ID, it.Kind)
 		}
 		if it.Status == model.Done {
 			return fmt.Errorf("%s is done; only a human can reopen it", it.ID)
@@ -81,18 +84,56 @@ func CheckTransition(a Actor, it *model.Item, to model.Status) error {
 	return nil
 }
 
-// CheckApprovedDone returns an error if a may not close it on behalf of
-// approver. Humans close anything they could close anyway; agents need a
-// named human approver and may only close work that is in review.
-func CheckApprovedDone(a Actor, it *model.Item, approver string) error {
+// CheckDone is the closure policy. Humans may close any item through the
+// ordinary transition rules. Agents may close a ticket once it has been
+// submitted and every deliverable and check is resolved. Stories and epics
+// are human-only, and an approver name does not change that.
+func CheckDone(a Actor, it *model.Item) error {
 	if a.Kind != Agent {
 		return CheckTransition(a, it, model.Done)
 	}
-	if strings.TrimSpace(approver) == "" {
-		return fmt.Errorf("agents need --approved-by <human> to mark %s done", it.ID)
+	if it.Kind != model.Ticket {
+		return fmt.Errorf("%s is a %s: only a human can close stories and epics after review", it.ID, it.Kind)
 	}
 	if it.Status != model.Review && it.Status != model.AgentReview {
-		return fmt.Errorf("%s is %s; agents can only close items in review or agent review", it.ID, it.Status)
+		return fmt.Errorf("%s is %s: submit it first; agents close tickets from review or agent review", it.ID, statusWord(it.Status))
+	}
+	if len(it.Deliverables) == 0 {
+		return fmt.Errorf("%s has no deliverables: add at least one with `shp deliverable add` before closing", it.ID)
+	}
+	if len(it.Checks) == 0 {
+		return fmt.Errorf("%s has no checks: add at least one with `shp check add` before closing", it.ID)
+	}
+	doneD, totalD := it.DeliverableCounts()
+	resolved, total := it.CheckCounts()
+	var open []string
+	if doneD < totalD {
+		for i, d := range it.Deliverables {
+			if !d.Done {
+				open = append(open, fmt.Sprintf("deliverable %d: %s", i+1, d.Text))
+				if len(open) == 3 {
+					break
+				}
+			}
+		}
+	}
+	if resolved < total {
+		for i, c := range it.Checks {
+			if !c.Resolved() {
+				open = append(open, fmt.Sprintf("check %d: %s", i+1, c.Text))
+				if len(open) == 6 {
+					break
+				}
+			}
+		}
+	}
+	if len(open) > 0 {
+		return fmt.Errorf("%s is not ready to close: %d/%d deliverables and %d/%d checks resolved. Open: %s",
+			it.ID, doneD, totalD, resolved, total, strings.Join(open, "; "))
 	}
 	return nil
+}
+
+func statusWord(s model.Status) string {
+	return strings.ReplaceAll(string(s), "_", " ")
 }

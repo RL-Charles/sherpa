@@ -181,7 +181,8 @@ func sessionContext(s *store.Store) string {
 		`shp deliverable add "outcome", shp where add <file> --symbols <Type,Func> --deliverable N, shp check add --for N "…" → ` +
 		`shp now "one-line state", shp check <n> -e <evidence>, shp measure "<name>" <value> --target <goal> → ` +
 		`shp lint <T-id> → open the PR with gh pr create (Sherpa links it) → shp submit -m "what changed" --verified "how it was checked". ` +
-		`Never mark work done; never edit .sherpa/ by hand.`)
+		`Close a ticket with shp done <T-id> when every deliverable and check is resolved; only a human closes a story or epic. ` +
+		`Never edit .sherpa/ by hand.`)
 	return b.String()
 }
 

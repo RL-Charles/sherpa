@@ -51,7 +51,7 @@ func TestBuildAndRender(t *testing.T) {
 		"◑ submitted for review",
 		"✓ verified: go test ./...",
 		"→ follow-up: visual mode",
-		"● approved · done · charles",
+		"● closed · done · charles",
 		"▸ Session 1", "▸ Planning",
 	} {
 		if !strings.Contains(text, want) {

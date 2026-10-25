@@ -397,7 +397,7 @@ edits are blocked until a ticket is claimed, and stopping with unlogged changes 
 7. Open the PR yourself (` + "`gh pr create`" + `); Sherpa links it to the ticket. ` + "`shp sync`" + ` links PRs made elsewhere.
 8. Finish: ` + "`shp submit -m \"what changed\" --verified \"how it was checked\"`" + `. It warns about anything missing and lands in agent review.
    Reviewing agent work when asked: ` + "`shp review <T-id> --pass -m \"what you checked\"`" + ` (on to human review) or ` + "`--reject -m \"what to fix\"`" + `.
-   Only a human marks work done.
+   Only a human marks a story or epic done; tickets close on their deliverables and checks.
 9. Never edit ` + "`.sherpa/`" + ` by hand. Commits get a ` + "`Ticket: T-xxxx`" + ` trailer automatically.
 `
 

@@ -9,7 +9,7 @@
 //	    max_lines: 200          # and its submit changed at most this many lines
 //
 // Every condition a rule gives must hold. With no file nothing auto-closes,
-// and work with an unresolved check, manual or not, always goes to a human.
+// and work with an unresolved deliverable or check always goes to a human.
 package policy
 
 import (
@@ -75,7 +75,13 @@ func (p Policy) Closes(it *model.Item, all []*model.Item, changedLines int) (rul
 	if len(p.AutoDone) == 0 {
 		return "", "no auto_done rules in " + File
 	}
-	if r, t := it.CheckCounts(); r < t {
+	if it.Kind != model.Ticket {
+		return "", "only tickets can auto-close"
+	}
+	if d, t := it.DeliverableCounts(); t == 0 || d < t {
+		return "", fmt.Sprintf("deliverables %d/%d unresolved", d, t)
+	}
+	if r, t := it.CheckCounts(); t == 0 || r < t {
 		if len(it.OpenManual()) > 0 {
 			return "", "manual checks wait for a human"
 		}

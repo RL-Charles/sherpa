@@ -55,6 +55,28 @@ func TestInboxListsReviewHandChecksFirst(t *testing.T) {
 	}
 }
 
+func TestInboxIncludesStoriesAwaitingHumanClose(t *testing.T) {
+	t.Setenv("SHERPA_ACTOR", "human:ann")
+	m := fixture(t)
+	s, _ := m.store.Get("S-001")
+	s.Status = model.Review
+	if err := m.store.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	m.reloadKeep()
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "✋ 1 needs you") {
+		t.Fatalf("header should count the story:\n%s", v)
+	}
+	press(m, "n")
+	if m.currentID() != "S-001" {
+		t.Fatalf("inbox should land on the story, got %q", m.currentID())
+	}
+	press(m, "a")
+	if got, _ := m.store.Get("S-001"); got.Status != model.Done {
+		t.Fatalf("a human should close the story from the inbox, got %s", got.Status)
+	}
+}
+
 func TestInboxApprove(t *testing.T) {
 	m := inboxFixture(t)
 	press(m, "n", "a")
