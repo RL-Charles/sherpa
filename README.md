@@ -249,7 +249,7 @@ so agents can't quietly work untracked:
 | Claude Code | `.claude/settings.json` | SessionStart, PreToolUse, PostToolUse, Stop |
 | Cursor (IDE and `cursor-agent`) | `.cursor/hooks.json` | sessionStart, preToolUse, afterFileEdit, stop |
 | Codex CLI ≥ 0.124 | `.codex/hooks.json` | Trust the project and approve the hooks in `/hooks` |
-| OpenCode | `.opencode/plugins/sherpa.ts` | Plugin calls `shp hook … --agent opencode` |
+| OpenCode V2 | `~/.config/opencode/plugins/sherpa.ts` | One global V2 plugin for every repo; it calls `shp hook … --agent opencode` and does nothing outside a Sherpa repo |
 
 Hooks fail open: if `shp` isn't installed or a repo has no `.sherpa/`, nothing is blocked.
 `shp hooks status` shows what's installed; `shp hooks uninstall` removes only Sherpa's entries.

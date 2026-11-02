@@ -83,8 +83,11 @@ Files written (in the checkout holding .sherpa):
   claude    .claude/settings.json
   cursor    .cursor/hooks.json
   codex     .codex/hooks.json   (approve in Codex's /hooks; project must be trusted)
-  opencode  .opencode/plugins/sherpa.ts
   git       .git/hooks/commit-msg
+
+OpenCode loads one global plugin for every repo, so it is written once:
+  opencode  $XDG_CONFIG_HOME/opencode/plugins/sherpa.ts (default ~/.config/…)
+A per-repo .opencode/plugins/sherpa.ts from an older Sherpa is removed.
   docs      AGENTS.md protocol section, CLAUDE.md → @AGENTS.md`,
 	}
 	print := func(results []hooks.Result) error {

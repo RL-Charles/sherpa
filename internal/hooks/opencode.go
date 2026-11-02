@@ -9,7 +9,8 @@ import (
 // opencode adapts the Sherpa OpenCode plugin (.opencode/plugins/sherpa.ts).
 // The plugin passes a small JSON payload; Sherpa answers with plain text on
 // stdout and exit code 2 when the plugin should block or continue.
-// https://opencode.ai/docs/plugins/
+// The plugin targets the OpenCode V2 API; V1 plugins do not load in V2.
+// https://opencode.ai/v2/docs/build/plugins/server/
 type opencode struct{}
 
 func init() { Adapters["opencode"] = opencode{} }

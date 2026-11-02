@@ -9,6 +9,56 @@ import (
 	"testing"
 )
 
+// TestMain keeps the global OpenCode plugin out of the real config directory.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "sherpa-xdg-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+func TestOpencodePluginIsGlobalAndReplacesPerRepoCopy(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	global, _ := opencodeGlobalPlugin()
+	root := gitInit(t)
+	legacy := filepath.Join(root, legacyPlugin)
+	_ = os.MkdirAll(filepath.Dir(legacy), 0o755)
+	_ = os.WriteFile(legacy, []byte("// "+pluginMarker+" (V1)\n"), 0o644)
+	if st := Status(root); st[3].Note == "" {
+		t.Errorf("status should note the per-repo copy: %+v", st[3])
+	}
+
+	rs := Install(root, []string{"opencode"}, false, false)
+	if len(rs) != 2 || rs[0].State != "installed" || rs[1].State != "removed" {
+		t.Fatalf("want global installed and per-repo removed: %+v", rs)
+	}
+	if data, _ := os.ReadFile(global); string(data) != opencodePlugin {
+		t.Fatalf("global plugin not written to %s", global)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("per-repo copy should be gone: %v", err)
+	}
+	if st := Status(root)[3]; st.State != "installed" || st.Note != "" {
+		t.Errorf("status after install: %+v", st)
+	}
+	// A per-repo file that isn't Sherpa's is left alone.
+	_ = os.WriteFile(legacy, []byte("// someone else's plugin\n"), 0o644)
+	if rs := Install(root, []string{"opencode"}, false, false); len(rs) != 1 || rs[0].State != "unchanged" {
+		t.Fatalf("second install: %+v", rs)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatalf("foreign plugin must be kept: %v", err)
+	}
+	rs = Uninstall(root, []string{"opencode"}, false)
+	if _, err := os.Stat(global); !os.IsNotExist(err) || rs[1].State != "removed" {
+		t.Fatalf("uninstall should remove the global plugin: %+v", rs)
+	}
+}
+
 func gitInit(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -24,6 +74,21 @@ func states(rs []Result) map[string]string {
 		m[r.Target+":"+filepath.Base(r.Path)] = r.State
 	}
 	return m
+}
+
+// OpenCode V2 loads only a default export with an id and setup; V1 plugin
+// functions fail to load, and its tools are shell, edit, write and patch.
+func TestOpencodePluginTargetsV2(t *testing.T) {
+	for _, want := range []string{"export default {", `id: "sherpa"`, "async setup(ctx", `"shell"`, `"patch"`, "input?.path", pluginMarker} {
+		if !strings.Contains(opencodePlugin, want) {
+			t.Errorf("plugin template missing %q", want)
+		}
+	}
+	for _, v1 := range []string{"@opencode-ai/plugin", "apply_patch", "filePath", `"bash"`, "promptAsync"} {
+		if strings.Contains(opencodePlugin, v1) {
+			t.Errorf("plugin template still uses V1 %q", v1)
+		}
+	}
 }
 
 func TestProtocolUpgradePreservesOtherSections(t *testing.T) {
