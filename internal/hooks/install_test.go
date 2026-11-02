@@ -26,6 +26,21 @@ func states(rs []Result) map[string]string {
 	return m
 }
 
+// OpenCode V2 loads only a default export with an id and setup; V1 plugin
+// functions fail to load, and its tools are shell, edit, write and patch.
+func TestOpencodePluginTargetsV2(t *testing.T) {
+	for _, want := range []string{"export default {", `id: "sherpa"`, "async setup(ctx", `"shell"`, `"patch"`, "input?.path", pluginMarker} {
+		if !strings.Contains(opencodePlugin, want) {
+			t.Errorf("plugin template missing %q", want)
+		}
+	}
+	for _, v1 := range []string{"@opencode-ai/plugin", "apply_patch", "filePath", `"bash"`, "promptAsync"} {
+		if strings.Contains(opencodePlugin, v1) {
+			t.Errorf("plugin template still uses V1 %q", v1)
+		}
+	}
+}
+
 func TestProtocolUpgradePreservesOtherSections(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "AGENTS.md")
