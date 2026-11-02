@@ -57,7 +57,7 @@ func Install(root string, agents []string, git, docs bool) []Result {
 		case "cursor":
 			out = append(out, installJSON(root, a, filepath.Join(".cursor", "hooks.json"), cursorHooks()))
 		case "opencode":
-			out = append(out, installPlugin(root))
+			out = append(out, installPlugin(root)...)
 		default:
 			out = append(out, Result{Target: a, State: "skipped", Note: "unknown agent (want " + strings.Join(Agents, ", ") + ")"})
 		}
@@ -83,8 +83,15 @@ func Uninstall(root string, agents []string, git bool) []Result {
 		case "cursor":
 			out = append(out, uninstallJSON(root, a, filepath.Join(".cursor", "hooks.json")))
 		case "opencode":
-			p := filepath.Join(root, ".opencode", "plugins", "sherpa.ts")
-			out = append(out, removeIfOurs(a, p, pluginMarker))
+			out = append(out, removeIfOurs(a, filepath.Join(root, legacyPlugin), pluginMarker))
+			if p, err := opencodeGlobalPlugin(); err == nil {
+				r := removeIfOurs(a, p, pluginMarker)
+				r.Path = tildePath(p)
+				if r.State == "removed" {
+					r.Note = "the OpenCode plugin is global: Sherpa hooks are off in OpenCode for every repo"
+				}
+				out = append(out, r)
+			}
 		}
 	}
 	if git {
@@ -110,9 +117,17 @@ func Status(root string) []Result {
 		}
 		out = append(out, Result{Target: c.agent, Path: c.rel, State: state})
 	}
-	plugin := filepath.Join(".opencode", "plugins", "sherpa.ts")
-	data, _ := os.ReadFile(filepath.Join(root, plugin))
-	out = append(out, Result{Target: "opencode", Path: plugin, State: map[bool]string{true: "installed", false: "absent"}[strings.Contains(string(data), pluginMarker)]})
+	oc := Result{Target: "opencode", State: "absent"}
+	if p, err := opencodeGlobalPlugin(); err == nil {
+		oc.Path = tildePath(p)
+		if data, _ := os.ReadFile(p); strings.Contains(string(data), pluginMarker) {
+			oc.State = "installed"
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, legacyPlugin)); strings.Contains(string(data), pluginMarker) {
+		oc.Note = legacyPlugin + " is from an older Sherpa; `shp hooks install` removes it"
+	}
+	out = append(out, oc)
 	if p, err := gitHookPath(root); err == nil {
 		data, _ := os.ReadFile(p)
 		rel, _ := filepath.Rel(root, p)
@@ -294,9 +309,48 @@ func uninstallJSON(root, agent, rel string) Result {
 
 // OpenCode plugin and git hook -------------------------------------------------
 
-func installPlugin(root string) Result {
-	rel := filepath.Join(".opencode", "plugins", "sherpa.ts")
-	return writeIfOurs("opencode", root, rel, opencodePlugin, pluginMarker, 0o644)
+// legacyPlugin is where older Sherpa versions put the OpenCode plugin, one
+// copy per repo. Those copies went stale when OpenCode V2 stopped loading V1
+// plugins, so the plugin is now installed once, globally.
+var legacyPlugin = filepath.Join(".opencode", "plugins", "sherpa.ts")
+
+// opencodeGlobalPlugin is the plugin path in OpenCode's global plugins
+// directory, which OpenCode loads for every directory. The plugin does
+// nothing where `shp` finds no .sherpa board.
+func opencodeGlobalPlugin() (string, error) {
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".config")
+	}
+	return filepath.Join(base, "opencode", "plugins", "sherpa.ts"), nil
+}
+
+func tildePath(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home+string(filepath.Separator)) {
+		return "~" + p[len(home):]
+	}
+	return p
+}
+
+// installPlugin writes the global OpenCode plugin and removes a per-repo copy
+// an older Sherpa installed (it would fail to load as a duplicate, or as V1).
+func installPlugin(root string) []Result {
+	p, err := opencodeGlobalPlugin()
+	if err != nil {
+		return []Result{{Target: "opencode", State: "skipped", Note: err.Error()}}
+	}
+	res := writeIfOurs("opencode", filepath.Dir(p), filepath.Base(p), opencodePlugin, pluginMarker, 0o644)
+	res.Path = tildePath(p)
+	out := []Result{res}
+	if r := removeIfOurs("opencode", filepath.Join(root, legacyPlugin), pluginMarker); r.State == "removed" {
+		r.Path, r.Note = legacyPlugin, "replaced by the global plugin"
+		out = append(out, r)
+	}
+	return out
 }
 
 // writeIfOurs writes content unless a different, non-Sherpa file is there.

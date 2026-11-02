@@ -6,6 +6,17 @@ All notable changes to Sherpa are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- OpenCode: the plugin targets the OpenCode V2 plugin API. V2 refused the V1 plugin
+  ("Plugin must export a default definition with an id and an effect or setup function"),
+  so Sherpa hooks were silently off in OpenCode.
+
+### Changed
+- OpenCode: `shp hooks install` writes the plugin once to OpenCode's global plugins
+  (`$XDG_CONFIG_HOME/opencode/plugins/sherpa.ts`), so every repo and worktree gets the
+  hooks without a per-repo file. It removes a per-repo `.opencode/plugins/sherpa.ts` an
+  older Sherpa installed; `shp hooks status` notes one that is still there.
+
 ### Added
 - Ticket briefs: `shp deliverable` (outcomes), `shp where` (code map: files, symbols,
   change type and the deliverable each serves), and `shp check add --for <n>` to link a check

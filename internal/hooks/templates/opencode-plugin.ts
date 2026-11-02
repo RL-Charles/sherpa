@@ -1,4 +1,6 @@
-// Sherpa ticket tracking for OpenCode. Installed by `shp hooks install`.
+// Sherpa ticket tracking for OpenCode. Installed by `shp hooks install` into
+// OpenCode's global plugins, so it loads in every directory; `shp hook` does
+// nothing where it finds no .sherpa board.
 // Calls `shp hook <event> --agent opencode`; exit code 2 means block/continue.
 // OpenCode V2 plugin API: https://opencode.ai/v2/docs/build/plugins/server/
 // It has no runtime imports besides Node built-ins, so it loads without a
