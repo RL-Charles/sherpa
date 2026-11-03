@@ -94,7 +94,7 @@ func TestOpencodePluginTargetsV2(t *testing.T) {
 func TestProtocolUpgradePreservesOtherSections(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "AGENTS.md")
-	old := "# Agents\n\n## Work tracking (Sherpa)\n\n1. shp start <T-id> before editing.\n\n## House rules\n\n- keep this\n"
+	old := "# Agents\n\n## Work tracking (Sherpa)\n\n" + protocolOpener + "`shp`).\n\n1. shp start <T-id> before editing.\n\n## House rules\n\n- keep this\n"
 	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -180,5 +180,12 @@ func TestInstallLeavesForeignGitHook(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(p); !strings.Contains(string(data), "my-linter") {
 		t.Fatal("foreign hook was modified")
+	}
+}
+
+func TestUpsertProtocolKeepsHandWrittenSection(t *testing.T) {
+	in := "# Repo\n\n" + protocolHeading + "\n\n1. `shp brief <T-id>` then `shp where add`.\n2. Keep docs/ROADMAP.md current.\n\n## Other\n- keep\n"
+	if out, changed := upsertProtocol(in); changed || out != in {
+		t.Fatalf("a hand-written protocol must be left alone:\n%s", out)
 	}
 }
