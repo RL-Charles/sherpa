@@ -457,6 +457,10 @@ edits are blocked until a ticket is claimed, and stopping with unlogged changes 
 9. Never edit ` + "`.sherpa/`" + ` by hand. Commits get a ` + "`Ticket: T-xxxx`" + ` trailer automatically.
 `
 
+// protocolOpener starts every protocol Sherpa has generated; a section under
+// protocolHeading without it was written by hand and is never replaced.
+const protocolOpener = "Work in this repo is tracked with Sherpa ("
+
 // protocolHeading lets installDocs replace an older Sherpa protocol instead of
 // appending a second copy.
 const protocolHeading = "## Work tracking (Sherpa)"
@@ -469,6 +473,9 @@ func upsertProtocol(data string) (string, bool) {
 	}
 	body := strings.TrimRight(data, "\n")
 	i := strings.Index(body, protocolHeading)
+	if i >= 0 && !strings.HasPrefix(strings.TrimSpace(body[i+len(protocolHeading):]), protocolOpener) {
+		return data, false // written for this repo, not by Sherpa: leave it alone
+	}
 	if i < 0 && strings.Contains(data, "shp brief") && strings.Contains(data, "shp where add") {
 		return data, false // a hand-written protocol already covers it
 	}
