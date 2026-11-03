@@ -12,12 +12,22 @@ All notable changes to Sherpa are recorded here. The format follows
   so Sherpa hooks were silently off in OpenCode.
 
 ### Changed
+- Review policy: tickets close on a passing agent review by default. `.sherpa/policy.yaml`
+  now names the exceptions with `human_review` rules (`paths`, `labels`, `under`,
+  `min_lines`); agents can't `shp done` a ticket one matches. Stories and epics stay
+  human-only. **Breaking:** `auto_done` is retired and refused with a migration hint.
 - OpenCode: `shp hooks install` writes the plugin once to OpenCode's global plugins
   (`$XDG_CONFIG_HOME/opencode/plugins/sherpa.ts`), so every repo and worktree gets the
   hooks without a per-repo file. It removes a per-repo `.opencode/plugins/sherpa.ts` an
   older Sherpa installed; `shp hooks status` notes one that is still there.
 
 ### Added
+- `shp policy init` drafts a review policy from the repo (migrations, CI/deploy, dependency
+  manifests, auth/secrets, size), guesses the verify command and previews recent tickets.
+  `shp hooks install` and session start flag a project without one.
+- Policy `commit: auto` commits a closed ticket's submitted files with a `Ticket:` trailer;
+  `sample` flags a share of auto-closed tickets for `shp policy audit`; `verify` goes into
+  the reviewer's prompt.
 - Ticket briefs: `shp deliverable` (outcomes), `shp where` (code map: files, symbols,
   change type and the deliverable each serves), and `shp check add --for <n>` to link a check
   to a deliverable. Rendering nests checks under the outcome they prove and prints Where as a

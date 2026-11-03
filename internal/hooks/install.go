@@ -450,8 +450,10 @@ edits are blocked until a ticket is claimed, and stopping with unlogged changes 
    checks, ticked checks without evidence and missing code-map entries.
 7. Open the PR yourself (` + "`gh pr create`" + `); Sherpa links it to the ticket. ` + "`shp sync`" + ` links PRs made elsewhere.
 8. Finish: ` + "`shp submit -m \"what changed\" --verified \"how it was checked\"`" + `. It warns about anything missing and lands in agent review.
-   Reviewing agent work when asked: ` + "`shp review <T-id> --pass -m \"what you checked\"`" + ` (on to human review) or ` + "`--reject -m \"what to fix\"`" + `.
-   Only a human marks a story or epic done; tickets close on their deliverables and checks.
+   Reviewing agent work when asked: ` + "`shp review <T-id> --pass -m \"what you checked\"`" + ` or ` + "`--reject -m \"what to fix\"`" + `.
+   A pass closes the ticket unless ` + "`.sherpa/policy.yaml`" + ` sends it to a human (` + "`shp policy <T-id>`" + ` says which);
+   with ` + "`commit: auto`" + ` the close also commits its files. Only a human marks a story or epic done.
+   No policy yet? Set one up with the user: ` + "`shp policy init --dry-run`" + `, agree on what needs a human, then write it.
 9. Never edit ` + "`.sherpa/`" + ` by hand. Commits get a ` + "`Ticket: T-xxxx`" + ` trailer automatically.
 `
 
@@ -462,11 +464,15 @@ const protocolHeading = "## Work tracking (Sherpa)"
 // upsertProtocol updates an existing Sherpa section in place, preserving any
 // user content before and after it. It reports whether the file changed.
 func upsertProtocol(data string) (string, bool) {
-	if strings.Contains(data, "shp brief") && strings.Contains(data, "shp where add") {
+	if strings.Contains(data, strings.TrimSpace(protocolDoc)) {
 		return data, false
 	}
 	body := strings.TrimRight(data, "\n")
-	if i := strings.Index(body, protocolHeading); i >= 0 {
+	i := strings.Index(body, protocolHeading)
+	if i < 0 && strings.Contains(data, "shp brief") && strings.Contains(data, "shp where add") {
+		return data, false // a hand-written protocol already covers it
+	}
+	if i >= 0 {
 		end := len(body)
 		if j := strings.Index(body[i+len(protocolHeading):], "\n## "); j >= 0 {
 			end = i + len(protocolHeading) + j + 1

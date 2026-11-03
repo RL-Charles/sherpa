@@ -21,6 +21,7 @@ import (
 	"github.com/RL-Charles/sherpa/internal/journal"
 	"github.com/RL-Charles/sherpa/internal/links"
 	"github.com/RL-Charles/sherpa/internal/model"
+	"github.com/RL-Charles/sherpa/internal/policy"
 	"github.com/RL-Charles/sherpa/internal/render"
 	"github.com/RL-Charles/sherpa/internal/store"
 	"github.com/RL-Charles/sherpa/internal/workflow"
@@ -436,7 +437,7 @@ func (a *app) submitCmd() *cobra.Command {
 	var followups, files []string
 	cmd := &cobra.Command{
 		Use:   "submit [id]",
-		Short: "Finish work on a ticket and send it for human review",
+		Short: "Finish work on a ticket and send it for review",
 		Long: `Send a ticket for review with a short PR-style summary.
 
   shp submit -m "Boxed tables via lipgloss" \
@@ -513,8 +514,9 @@ func (a *app) doneCmd() *cobra.Command {
 		Long: `Mark an item done.
 
 Tickets: an agent may close a ticket once it has been submitted for review and
-every deliverable and check is resolved. No human approval is required. Pass
---approved-by to record a human who asked for the close.
+every deliverable and check is resolved, unless a human_review rule in
+.sherpa/policy.yaml matches it (see shp policy). No human approval is
+required otherwise. Pass --approved-by to record a human who asked for the close.
 
 Stories and epics: only a human can close these after review. Agents cannot
 close them, even with --approved-by.`,
@@ -530,6 +532,20 @@ close them, even with --approved-by.`,
 			if err := workflow.CheckDone(a.actor, it); err != nil {
 				return err
 			}
+			agentTicket := a.actor.Kind == workflow.Agent && it.Kind == model.Ticket
+			var p policy.Policy
+			if agentTicket {
+				if p, err = policy.Load(a.store.Dir); err != nil {
+					return err
+				}
+				rule, err := a.humanRule(p, it)
+				if err != nil {
+					return err
+				}
+				if rule != "" {
+					return fmt.Errorf("%s waits for a human under .sherpa/policy.yaml (rule %s): leave it in review for a human to close", it.ID, rule)
+				}
+			}
 			from := it.Status
 			it.Status = model.Done
 			if err := a.store.Save(it); err != nil {
@@ -538,6 +554,9 @@ close them, even with --approved-by.`,
 			if err := a.record(journal.Event{Item: it.ID, Type: "status", From: string(from), To: string(model.Done),
 				Message: note, ApprovedBy: approver, Commit: gitinfo.Head(a.store.CodeRoot)}); err != nil {
 				return err
+			}
+			if agentTicket {
+				a.afterAgentClose(p, it)
 			}
 			return a.done(it)
 		},
@@ -552,12 +571,13 @@ func (a *app) reviewCmd() *cobra.Command {
 	var pass, reject, spawn bool
 	cmd := &cobra.Command{
 		Use:   "review <id> (--pass | --reject) -m \"notes\"",
-		Short: "Review work in agent review: pass it to human review, or send it back",
+		Short: "Review work in agent review: pass it (closing it) or send it back",
 		Long: `Review an item in agent_review, where agent submissions land. A human or
 another agent checks the work, then:
 
-  --pass    moves it to review for a human look, or straight to done
-            when .sherpa/policy.yaml allows it (tickets only; see shp policy)
+  --pass    closes a ticket whose deliverables and checks are resolved, unless
+            a human_review rule in .sherpa/policy.yaml matches it; that work,
+            stories and epics move to review for a human (see shp policy)
   --reject  sends it back to in_progress with what needs fixing
 
   --spawn   launches the project's reviewer agent (reviewer.command in
@@ -607,13 +627,20 @@ deliverables and checks are resolved; stories and epics are human-only.`,
 			if reject {
 				to, verdict = model.InProgress, "reject"
 			}
-			rule, err := a.policyClose(it, pass)
+			p, err := policy.Load(a.store.Dir)
 			if err != nil {
 				return err
 			}
+			human := ""
+			if pass {
+				if human, err = a.needsHuman(p, it); err != nil {
+					return err
+				}
+			}
 			var from model.Status
-			if rule != "" { // the project's policy closes it; no human gate
-				from, it.Status, to = it.Status, model.Done, model.Done
+			approved := ""
+			if pass && human == "" { // the policy needs no human for it
+				from, it.Status, to, approved = it.Status, model.Done, model.Done, "policy"
 				err = a.store.Save(it)
 			} else {
 				from, err = a.setStatus(it, to)
@@ -621,15 +648,25 @@ deliverables and checks are resolved; stories and epics are human-only.`,
 			if err != nil {
 				return err
 			}
+			var detail []string
+			if human != "" {
+				detail = []string{"waits for a human: " + human}
+				if !a.json {
+					fmt.Fprintf(os.Stderr, "✋ %s waits for a human: %s\n", it.ID, human)
+				}
+			}
 			if err := a.record(journal.Event{Item: it.ID, Type: "review", Kind: verdict, From: string(from), To: string(to),
-				Message: notes, ApprovedBy: rule, Commit: gitinfo.Head(a.store.CodeRoot)}); err != nil {
+				Message: notes, Detail: detail, ApprovedBy: approved, Commit: gitinfo.Head(a.store.CodeRoot)}); err != nil {
 				return err
+			}
+			if to == model.Done {
+				a.afterAgentClose(p, it)
 			}
 			return a.done(it)
 		},
 	}
 	cmd.Flags().StringVarP(&notes, "message", "m", "", "review notes (required)")
-	cmd.Flags().BoolVar(&pass, "pass", false, "send it on to human review")
+	cmd.Flags().BoolVar(&pass, "pass", false, "close it, or send it to a human when the policy says so")
 	cmd.Flags().BoolVar(&reject, "reject", false, "send it back to in progress")
 	cmd.Flags().BoolVar(&spawn, "spawn", false, "launch the configured reviewer agent instead")
 	return cmd
@@ -697,6 +734,20 @@ func (a *app) contextCmd() *cobra.Command {
 			section("Ready", ready)
 			section("Awaiting agent review (shp review <id> --pass|--reject)", agentReview)
 			section("Awaiting review", review)
+			if events, err := journal.ReadAll(a.store.Dir); err == nil {
+				var audits []*model.Item
+				for _, id := range pendingAudits(events) {
+					if it, err := a.store.Get(id); err == nil {
+						audits = append(audits, it)
+					}
+				}
+				section("Sampled for a human audit (shp policy audit <id> -m \"notes\")", audits)
+			}
+			if p, err := policy.Load(a.store.Dir); err != nil {
+				fmt.Println("\n⚠ review policy:", err)
+			} else if !p.Found {
+				fmt.Println("\n⚠ No review policy: tickets close on a passing agent review. Set one up with `shp policy init`.")
+			}
 			return nil
 		},
 	}

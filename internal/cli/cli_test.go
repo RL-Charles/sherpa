@@ -167,46 +167,6 @@ func TestSubmitLaunchesReviewer(t *testing.T) {
 	t.Fatal("an agent submit should launch the configured reviewer")
 }
 
-func TestPolicyClosesOnPass(t *testing.T) {
-	s := project(t)
-	if err := os.WriteFile(filepath.Join(s.Dir, "policy.yaml"), []byte("auto_done:\n  - name: low-risk\n    under: [S-001]\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := shp(t, "agent:claude", "deliverable", "add", "-t", "T-0001", "outcome"); err != nil {
-		t.Fatal(err)
-	}
-	if err := shp(t, "agent:claude", "deliverable", "done", "1", "-t", "T-0001", "-e", "tests"); err != nil {
-		t.Fatal(err)
-	}
-	if err := shp(t, "agent:claude", "check", "add", "-t", "T-0001", "--for", "1", "--manual", "eyeball"); err != nil {
-		t.Fatal(err)
-	}
-	submitAsAgent(t)
-	t.Setenv("SHERPA_SESSION", "reviewer")
-	if err := shp(t, "agent:reviewer", "review", "T-0001", "--pass", "-m", "ok"); err != nil {
-		t.Fatal(err)
-	}
-	if it := get(t, s, "T-0001"); it.Status != model.Review {
-		t.Fatalf("an open manual check must keep it for a human, got %s", it.Status)
-	}
-
-	t.Setenv("SHERPA_SESSION", "test")
-	if err := shp(t, "human:ann", "check", "1", "-t", "T-0001", "-e", "looked"); err != nil {
-		t.Fatal(err)
-	}
-	if err := shp(t, "human:ann", "status", "T-0001", "in_progress"); err != nil {
-		t.Fatal(err)
-	}
-	submitAsAgent(t)
-	t.Setenv("SHERPA_SESSION", "reviewer")
-	if err := shp(t, "agent:reviewer", "review", "T-0001", "--pass", "-m", "ok"); err != nil {
-		t.Fatal(err)
-	}
-	if it := get(t, s, "T-0001"); it.Status != model.Done {
-		t.Fatalf("policy should close it, got %s", it.Status)
-	}
-}
-
 func TestNewEpicNeedsGoals(t *testing.T) {
 	s := project(t)
 	if err := shp(t, "agent:claude", "new", "epic", "Vague"); err == nil || !strings.Contains(err.Error(), "-g") {

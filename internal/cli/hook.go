@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/RL-Charles/sherpa/internal/hooks"
+	"github.com/RL-Charles/sherpa/internal/policy"
 	"github.com/RL-Charles/sherpa/internal/workflow"
 )
 
@@ -111,7 +112,10 @@ A per-repo .opencode/plugins/sherpa.ts from an older Sherpa is removed.
 			if err := a.load(); err != nil {
 				return err
 			}
-			return print(hooks.Install(a.store.Root, agents, !noGit, !noDocs))
+			if err := print(hooks.Install(a.store.Root, agents, !noGit, !noDocs)); err != nil {
+				return err
+			}
+			return a.printPolicyState()
 		},
 	}
 	uninstall := &cobra.Command{
@@ -131,7 +135,10 @@ A per-repo .opencode/plugins/sherpa.ts from an older Sherpa is removed.
 			if err := a.load(); err != nil {
 				return err
 			}
-			return print(hooks.Status(a.store.Root))
+			if err := print(hooks.Status(a.store.Root)); err != nil {
+				return err
+			}
+			return a.printPolicyState()
 		},
 	}
 	for _, c := range []*cobra.Command{install, uninstall} {
@@ -141,4 +148,21 @@ A per-repo .opencode/plugins/sherpa.ts from an older Sherpa is removed.
 	install.Flags().BoolVar(&noDocs, "no-docs", false, "don't touch AGENTS.md / CLAUDE.md")
 	cmd.AddCommand(install, uninstall, status)
 	return cmd
+}
+
+// printPolicyState says whether the project has a review policy yet.
+func (a *app) printPolicyState() error {
+	if a.json {
+		return nil
+	}
+	p, err := policy.Load(a.store.Dir)
+	switch {
+	case err != nil:
+		fmt.Printf("⚠ %-9s %-10s %s  — %v\n", "policy", "broken", ".sherpa/policy.yaml", err)
+	case p.Found:
+		fmt.Printf("✓ %-9s %-10s %s\n", "policy", "present", ".sherpa/policy.yaml")
+	default:
+		fmt.Printf("⚠ %-9s %-10s %s  — tickets close on a passing agent review; run `shp policy init` to choose what needs a human\n", "policy", "absent", ".sherpa/policy.yaml")
+	}
+	return nil
 }

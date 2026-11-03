@@ -4,6 +4,7 @@ package gitinfo
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,4 +95,38 @@ func Branch(dir string) string {
 		return ""
 	}
 	return b
+}
+
+// Commit stages files (new, changed or deleted) and commits only those paths
+// with msg, leaving anything else staged or dirty alone. It returns the new
+// short sha, or "" when the files have nothing to commit.
+func Commit(root, msg string, files []string) (string, error) {
+	var paths []string
+	for _, f := range files {
+		_, statErr := os.Stat(filepath.Join(root, f))
+		if tracked, _ := git(root, "ls-files", "--", f); statErr == nil || tracked != "" {
+			paths = append(paths, f)
+		}
+	}
+	if len(paths) == 0 {
+		return "", nil
+	}
+	run := func(args ...string) error {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if err := run(append([]string{"add", "-A", "--"}, paths...)...); err != nil {
+		return "", err
+	}
+	if _, err := git(root, append([]string{"diff", "--cached", "--quiet", "--"}, paths...)...); err == nil {
+		return "", nil
+	}
+	if err := run(append([]string{"commit", "-q", "-m", msg, "--"}, paths...)...); err != nil {
+		return "", err
+	}
+	return Head(root), nil
 }

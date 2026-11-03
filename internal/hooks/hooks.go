@@ -28,6 +28,7 @@ import (
 	"github.com/RL-Charles/sherpa/internal/links"
 	"github.com/RL-Charles/sherpa/internal/live"
 	"github.com/RL-Charles/sherpa/internal/model"
+	"github.com/RL-Charles/sherpa/internal/policy"
 	"github.com/RL-Charles/sherpa/internal/store"
 )
 
@@ -177,6 +178,15 @@ func sessionContext(s *store.Store) string {
 	list("In progress", model.InProgress, 8)
 	list("Ready to start", model.Ready, 8)
 	list("Awaiting agent review (if asked to review: shp review <id> --pass|--reject -m \"notes\")", model.AgentReview, 8)
+	switch p, err := policy.Load(s.Dir); {
+	case err != nil:
+		fmt.Fprintf(&b, "⚠ Review policy is broken: %v\n", err)
+	case !p.Found:
+		b.WriteString("⚠ No review policy (.sherpa/policy.yaml): every ticket closes on a passing agent review, with no human gate and no auto-commit. " +
+			"Set one up with the user before closing work: run `shp policy init --dry-run`, show them the drafted human_review rules " +
+			"(paths, labels, size that need a human) and the preview, ask whether closed tickets should auto-commit (--commit auto|off), " +
+			"what share to sample for a human audit (--sample) and which test command the reviewer runs (--verify), then run `shp policy init` with their answers.\n")
+	}
 	b.WriteString(`Protocol: shp brief <T-id> → shp start <T-id> → shp log "headline" -f <file> (-k decision|verify|blocker, -d details) → ` +
 		`shp deliverable add "outcome", shp where add <file> --symbols <Type,Func> --deliverable N, shp check add --for N "…" → ` +
 		`shp now "one-line state", shp check <n> -e <evidence>, shp measure "<name>" <value> --target <goal> → ` +
