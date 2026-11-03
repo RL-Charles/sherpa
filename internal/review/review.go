@@ -19,27 +19,34 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RL-Charles/sherpa/internal/policy"
 	"github.com/RL-Charles/sherpa/internal/store"
 )
 
-// Prompt is what the reviewer agent is asked to do.
-func Prompt(id string) string {
-	return strings.ReplaceAll(`You are an independent reviewer for Sherpa ticket {id}. Another agent did
+// Prompt is what the reviewer agent is asked to do. verify is the project's
+// own check (policy.yaml verify), run on every review when set.
+func Prompt(id, verify string) string {
+	if verify != "" {
+		verify = "\n   Always run the project's verify command too: " + verify
+	}
+	return strings.NewReplacer("{id}", id, "{verify}", verify).Replace(`You are an independent reviewer for Sherpa ticket {id}. Another agent did
 the work; you did not. Do not edit code or tickets beyond the review itself.
 
 1. shp brief {id} for the compact intent, deliverables, next check and code map;
    shp show {id} for the full brief and the submit summary;
    shp activity -i {id} for what was done and which files changed.
 2. Read the changed code and the diff. Run the verification the submit
-   claims (tests, build), and anything else you need to be convinced.
+   claims (tests, build), and anything else you need to be convinced.{verify}
 3. Check every ticked check against its evidence. Checks marked ✋ are
    manual: a human verifies those, so leave them alone.
 4. Finish with exactly one command:
    shp review {id} --pass -m "what you checked and found"
    shp review {id} --reject -m "what is wrong and what to fix"
    Pass only if the work does what the ticket asks and the checks hold up.
+   A pass closes the ticket unless .sherpa/policy.yaml sends it to a human
+   (shp policy {id} says which), so your review may be the last one.
    Mention anything a human should look at by hand in your notes.
-`, "{id}", id)
+`)
 }
 
 // Session is the Sherpa session name a reviewer of id records under.
@@ -79,7 +86,8 @@ func Spawn(s *store.Store, command, id string) (string, error) {
 	defer log.Close()
 	cmd := shell(command)
 	cmd.Dir = s.CodeRoot
-	cmd.Stdin = strings.NewReader(Prompt(id))
+	p, _ := policy.Load(s.Dir) // a broken policy still gets a review
+	cmd.Stdin = strings.NewReader(Prompt(id, p.Verify))
 	cmd.Stdout, cmd.Stderr = log, log
 	cmd.Env = append(env(os.Environ()),
 		"SHERPA_ACTOR=agent:reviewer",

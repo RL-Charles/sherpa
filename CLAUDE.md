@@ -44,7 +44,7 @@ internal/tui/       Bubble Tea app: tree, live-preview editor (blocks.go, editor
 6. Run `./bin/shp lint <T-id>`; fix missing Why/Context/Design, deliverables without checks, ticked checks without evidence and missing code-map entries.
 7. Open PRs with `gh pr create` (Sherpa links them; `./bin/shp sync` for others).
 8. Finish with a PR-style submit: `./bin/shp submit -m "what changed" --verified "how it was checked" [--followup "gap"]` (warns about missing PR/checks/deliverables/code map). Agent submits land in **agent review**.
-   - Asked to review agent work? `./bin/shp review <T-id> --pass -m "what you checked"` sends it to human review; `--reject -m "what to fix"` sends it back to in progress.
-9. Close a ticket when every deliverable and check is resolved: `./bin/shp done <T-id>` (no human approval needed; `--approved-by <name>` is optional audit). Stories and epics are closed only by a human after review; agents cannot close them.
+   - Asked to review agent work? `./bin/shp review <T-id> --pass -m "what you checked"` closes it unless `.sherpa/policy.yaml` sends it to a human (`./bin/shp policy <T-id>` says which); `--reject -m "what to fix"` sends it back to in progress.
+9. Close a ticket when every deliverable and check is resolved: `./bin/shp done <T-id>` (refused when a `human_review` rule matches; `--approved-by <name>` is optional audit). Stories and epics are closed only by a human after review; agents cannot close them.
 10. Update a description with `./bin/shp edit <id> --stdin`. Never write a worklog into ticket markdown; it is generated from `.sherpa/sessions/`.
 11. Commit messages include a `Ticket: T-xxxx` line.

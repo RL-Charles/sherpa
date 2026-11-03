@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -166,5 +167,24 @@ func TestStopNudgeKeepsHeartbeat(t *testing.T) {
 	}
 	if got := live.Read(s.Dir, time.Now()); len(got) != 1 {
 		t.Fatalf("a nudged agent keeps working; heartbeat should remain, got %+v", got)
+	}
+}
+
+func TestSessionContextAsksForPolicy(t *testing.T) {
+	s, root := project(t)
+	if out := Handle(Input{Event: SessionStart, Dir: root}); !strings.Contains(out.Context, "shp policy init --dry-run") {
+		t.Errorf("without a policy, session start should ask the agent to set one up:\n%s", out.Context)
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, "policy.yaml"), []byte("commit: off\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := Handle(Input{Event: SessionStart, Dir: root}); strings.Contains(out.Context, "review policy") {
+		t.Errorf("with a policy, no nudge:\n%s", out.Context)
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, "policy.yaml"), []byte("auto_done:\n  - name: x\n    labels: [y]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := Handle(Input{Event: SessionStart, Dir: root}); !strings.Contains(out.Context, "Review policy is broken") {
+		t.Errorf("a broken policy should be reported:\n%s", out.Context)
 	}
 }

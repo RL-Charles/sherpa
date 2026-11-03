@@ -1,0 +1,26 @@
+# Sherpa review policy. Tickets close on a passing agent review unless a
+# human_review rule matches. Stories and epics always close by a human, and
+# so does a ticket with an unresolved deliverable or check.
+# Check one ticket with: shp policy <T-id>
+
+# A ticket matching any rule waits for a human. Every condition a rule gives
+# must hold (paths: its submit or code map touches one; labels: it has one;
+# under: it sits below that story/epic; min_lines: its submit changed that many).
+human_review:
+  - name: ship
+    paths: [".github/workflows/**"]
+  - name: dependencies
+    paths: ["go.mod"]
+  - name: flagged
+    labels: ["security", "needs-human"]
+  - name: large
+    min_lines: 400
+
+# auto: commit a ticket's submitted files (with a Ticket: trailer) when an agent closes it.
+commit: off
+
+# Share of auto-closed tickets flagged for a human audit (shp policy audit).
+sample: 0.1
+
+# What the reviewer runs before passing work.
+verify: "mise exec -- go test ./..."

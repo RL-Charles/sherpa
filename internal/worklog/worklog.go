@@ -171,7 +171,22 @@ func describe(e journal.Event, hideSubmit bool) (icon, color, headline string, d
 		if e.Kind == "spawn" {
 			return "⟳", "cyan", "independent reviewer launched by " + who, detail
 		}
-		return "✔", "green", "agent review passed by " + who + " · ready for human review", detail
+		return "✔", "green", "agent review passed by " + who + " · waits for a human", detail
+	case "audit": // a human checking work an agent closed on its own
+		if e.Kind == "sampled" {
+			return "⚑", "yellow", e.Message, detail
+		}
+		if e.Message != "" {
+			detail = append([]string{e.Message}, detail...)
+		}
+		who := e.Actor
+		if _, name, ok := strings.Cut(who, ":"); ok {
+			who = name
+		}
+		if e.Kind == "reopen" {
+			return "↩", "red", "audit by " + who + " · back in progress", detail
+		}
+		return "✔", "green", "audited by " + who, detail
 	case "status":
 		if e.Message != "" && !(hideSubmit && (e.To == "review" || e.To == "agent_review")) {
 			detail = append([]string{e.Message}, detail...)

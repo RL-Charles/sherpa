@@ -107,13 +107,13 @@ Add this to your agent instructions (`CLAUDE.md`, `AGENTS.md`, …):
 4. Log as you go: `shp log "headline" -f file`, or `-k decision` / `-k verify` / `-k blocker`, with `-d` for details.
 5. Run `shp lint <T-id>`; fix missing context, deliverables, evidence or code-map entries.
 6. Finish with `shp submit -m "what changed" --verified "how it was checked"`. It lands in agent review.
-7. When asked to review agent work: `shp review <id> --pass -m "…"` (on to human review) or `--reject -m "…"`.
-8. Close a ticket when every deliverable and check is resolved: `shp done <T-id>` (no human approval needed). Stories and epics are closed by a human after review; agents cannot close them.
+7. When asked to review agent work: `shp review <id> --pass -m "…"` (closes it unless `.sherpa/policy.yaml` sends it to a human) or `--reject -m "…"`.
+8. Close a ticket when every deliverable and check is resolved: `shp done <T-id>`, unless a `human_review` rule matches it. Stories and epics are closed by a human after review; agents cannot close them.
 ```
 
 Tickets close on evidence, not on a click: once a ticket has been submitted and every deliverable
-and check is resolved, an agent may run `shp done <T-id>`. No approver is required. Agent review
-and `shp review` remain available for a second look, and a human can close at any time.
+and check is resolved, a passing agent review (or `shp done <T-id>`) closes it. No approver is
+required unless the project's review policy names the ticket. A human can close at any time.
 
 Stories and epics are different: only a human can close them, after reviewing the work beneath
 them. Agents cannot close a story or epic, even with `--approved-by`.
@@ -131,18 +131,41 @@ reviewer:
 The reviewer runs detached as `agent:reviewer` in its own session, logs to
 `.sherpa/.local/reviews/<id>.log`, and ends with `shp review --pass` or `--reject`.
 
-Low-risk tickets can still be closed by a passing agent review. `.sherpa/policy.yaml` lists which
-ones; anything with an unresolved deliverable or check still goes to a human. `shp policy <id>`
-explains the decision.
+### Review policy
+
+Each project decides which work a human still has to see. `.sherpa/policy.yaml` lists the
+exceptions; everything else closes on a passing agent review. Agents verify before the close,
+humans sample after it, and mistakes that keep coming back become rules, lints or tests instead
+of more review.
 
 ```yaml
-auto_done:
-  - name: docs
-    labels: [docs, tests]
-  - name: tooling
-    under: [S-008]
-    max_lines: 200
+human_review:                 # a ticket matching any rule waits for a human
+  - name: migrations
+    paths: ["db/migrations/**"]
+  - name: dependencies
+    paths: [go.mod, package.json]
+  - name: flagged
+    labels: [security, needs-human]
+  - name: large
+    min_lines: 400
+commit: auto                  # commit the ticket's files (Ticket: trailer) when an agent closes it
+sample: 0.1                   # flag 10% of auto-closed tickets for a human audit
+verify: go test ./...         # what the reviewer runs before passing work
 ```
+
+Every condition in a rule must hold; write several rules for "or". `paths` match the files the
+submit touched plus the code map, with `**` for any depth; a pattern without a slash matches a
+file name anywhere. Unresolved deliverables or checks, open ✋ checks, stories and epics always
+wait for a human.
+
+- `shp policy init` drafts the file: it scans for migrations, CI and deploy config, dependency
+  manifests, auth and secrets, guesses the test command, and previews the verdict on recent
+  tickets. `--dry-run` prints it; `--commit`, `--sample`, `--verify`, `--reviewer` and
+  `--auto-review` record the user's answers.
+- `shp hooks install` and the session-start hook flag a project without a policy, and ask the
+  agent to set one up with the user.
+- `shp policy <id>` explains one decision. `shp policy audit` lists sampled tickets; a human
+  records each with `shp policy audit <id> -m "…"` (or `--reopen`).
 
 Some checks only a human can make (how it looks, how it feels, a real device). Agents add them with
 `shp check add --manual "…" --how "steps"`; they show as ✋, and only humans tick them. An agent
