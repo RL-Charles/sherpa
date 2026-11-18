@@ -568,7 +568,7 @@ close them, even with --approved-by.`,
 
 func (a *app) reviewCmd() *cobra.Command {
 	var notes string
-	var pass, reject, spawn bool
+	var pass, reject, spawn, next bool
 	cmd := &cobra.Command{
 		Use:   "review <id> (--pass | --reject) -m \"notes\"",
 		Short: "Review work in agent review: pass it (closing it) or send it back",
@@ -581,13 +581,30 @@ another agent checks the work, then:
   --reject  sends it back to in_progress with what needs fixing
 
   --spawn   launches the project's reviewer agent (reviewer.command in
-            .sherpa/config.yaml) to do the review in its own session
+            .sherpa/config.yaml) to do the review in its own session;
+            past reviewer.max_running live reviewers it queues instead
+  --next    (no id) starts queued reviewers while there is room; each
+            capped reviewer runs this when it exits
 
 Notes (-m) are required and go in the worklog. The session that submitted
 the work can't review it. To close a ticket outright, use shp done once its
 deliverables and checks are resolved; stories and epics are human-only.`,
-		Args: cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if next {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if next {
+				if pass || reject || spawn {
+					return errors.New("--next takes no other flags")
+				}
+				if err := a.load(); err != nil {
+					return err
+				}
+				return a.nextReviewers()
+			}
 			if spawn {
 				if pass || reject {
 					return errors.New("--spawn launches a reviewer; it can't be combined with a verdict")
@@ -669,6 +686,7 @@ deliverables and checks are resolved; stories and epics are human-only.`,
 	cmd.Flags().BoolVar(&pass, "pass", false, "close it, or send it to a human when the policy says so")
 	cmd.Flags().BoolVar(&reject, "reject", false, "send it back to in progress")
 	cmd.Flags().BoolVar(&spawn, "spawn", false, "launch the configured reviewer agent instead")
+	cmd.Flags().BoolVar(&next, "next", false, "start queued reviewers while under reviewer.max_running")
 	return cmd
 }
 

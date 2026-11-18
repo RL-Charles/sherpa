@@ -24,7 +24,15 @@ import (
 // launchReviewer starts the configured reviewer agent on it and records that
 // in the journal.
 func (a *app) launchReviewer(it *model.Item) error {
-	log, err := review.Spawn(a.store, a.store.Config.Reviewer.Command, it.ID)
+	r := a.store.Config.Reviewer
+	log, err := review.Spawn(a.store, r.Command, it.ID, r.MaxRunning)
+	if errors.Is(err, review.ErrQueued) {
+		if !a.json {
+			fmt.Fprintf(os.Stderr, "⏳ reviewer for %s queued (%d running, max_running %d)\n",
+				it.ID, review.Count(a.store, ""), r.MaxRunning)
+		}
+		return a.record(journal.Event{Item: it.ID, Type: "review", Kind: "queued", Message: r.Command})
+	}
 	if err != nil {
 		return err
 	}
@@ -49,6 +57,28 @@ func (a *app) autoReview(it *model.Item) {
 	if err := a.launchReviewer(it); err != nil {
 		fmt.Fprintln(os.Stderr, "⚠ reviewer not launched:", err)
 	}
+}
+
+// nextReviewers starts queued reviewers, oldest first, while there is room
+// under max_running. Items that left agent_review are dropped from the queue.
+func (a *app) nextReviewers() error {
+	r := a.store.Config.Reviewer
+	self := os.Getenv("SHERPA_REVIEW")
+	for _, id := range review.Queued(a.store) {
+		if r.MaxRunning > 0 && review.Count(a.store, self) >= r.MaxRunning {
+			return nil
+		}
+		it, err := a.store.Get(id)
+		if err != nil || it.Status != model.AgentReview {
+			review.Dequeue(a.store, id)
+			continue
+		}
+		if err := a.launchReviewer(it); err != nil {
+			fmt.Fprintln(os.Stderr, "⚠ reviewer not launched:", err)
+			review.Dequeue(a.store, id)
+		}
+	}
+	return nil
 }
 
 // selfReview refuses a verdict from the session that submitted the work.

@@ -34,9 +34,12 @@ type Config struct {
 // Reviewer is the agent that reviews agent submissions: a shell command that
 // reads the review prompt on stdin, e.g. `claude -p`. With Auto it launches
 // after every agent submit; otherwise on `shp review <id> --spawn`.
+// MaxRunning caps live reviewers; extra ones queue and start as others
+// finish (0: no cap).
 type Reviewer struct {
-	Command string `yaml:"command,omitempty"`
-	Auto    bool   `yaml:"auto,omitempty"`
+	Command    string `yaml:"command,omitempty"`
+	Auto       bool   `yaml:"auto,omitempty"`
+	MaxRunning int    `yaml:"max_running,omitempty"`
 }
 
 type Store struct {

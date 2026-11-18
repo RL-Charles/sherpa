@@ -126,10 +126,13 @@ configure a reviewer: a shell command that reads the review prompt on stdin.
 reviewer:
   command: claude -p --allowedTools "Bash(shp:*)" "Bash(git:*)" "Bash(go test:*)" Read Grep Glob
   auto: true   # launch after every agent submit; otherwise `shp review <id> --spawn`
+  max_running: 3   # optional: past this, reviewers queue (0 or unset: no cap)
 ```
 
 The reviewer runs detached as `agent:reviewer` in its own session, logs to
 `.sherpa/.local/reviews/<id>.log`, and ends with `shp review --pass` or `--reject`.
+With `max_running`, a burst of submits queues its reviewers; each capped reviewer runs
+`shp review --next` when it exits, which starts the oldest queued one still in agent review.
 
 ### Review policy
 

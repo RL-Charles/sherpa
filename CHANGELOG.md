@@ -6,6 +6,11 @@ All notable changes to Sherpa are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `reviewer.max_running` caps live reviewers. Past it, `shp submit` and `shp review --spawn`
+  queue the review; each capped reviewer runs `shp review --next` when it exits, starting the
+  oldest queued item still in agent review. A burst of submits no longer starts one reviewer each.
+
 ### Fixed
 - OpenCode: the plugin targets the OpenCode V2 plugin API. V2 refused the V1 plugin
   ("Plugin must export a default definition with an id and an effect or setup function"),
