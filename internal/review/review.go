@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -66,9 +67,56 @@ func Running(s *store.Store, id string) bool {
 	return err == nil && alive(pid)
 }
 
+// Self is the shp binary a capped reviewer runs `review --next` with.
+var Self = os.Executable
+
+// ErrQueued means the reviewer was not started because max reviewers are
+// already running; it waits in the queue for Next.
+var ErrQueued = errors.New("reviewer queued")
+
+// Count is how many launched reviewers are still alive, not counting skip
+// (the reviewer asking, which is finishing).
+func Count(s *store.Store, skip string) int {
+	pids, _ := filepath.Glob(filepath.Join(dir(s), "*.pid"))
+	n := 0
+	for _, p := range pids {
+		id := strings.TrimSuffix(filepath.Base(p), ".pid")
+		if id != skip && Running(s, id) {
+			n++
+		}
+	}
+	return n
+}
+
+// Queued lists the waiting reviews, oldest first.
+func Queued(s *store.Store) []string {
+	files, _ := filepath.Glob(filepath.Join(dir(s), "*.queued"))
+	type q struct {
+		id string
+		t  time.Time
+	}
+	var qs []q
+	for _, f := range files {
+		if fi, err := os.Stat(f); err == nil {
+			qs = append(qs, q{strings.TrimSuffix(filepath.Base(f), ".queued"), fi.ModTime()})
+		}
+	}
+	sort.Slice(qs, func(i, j int) bool { return qs[i].t.Before(qs[j].t) })
+	ids := make([]string, len(qs))
+	for i, x := range qs {
+		ids[i] = x.id
+	}
+	return ids
+}
+
+// Dequeue drops id from the queue.
+func Dequeue(s *store.Store, id string) { _ = os.Remove(filepath.Join(dir(s), id+".queued")) }
+
 // Spawn starts command (run by the shell) in the code checkout with the
 // review prompt on stdin, detached from the caller. It returns the log path.
-func Spawn(s *store.Store, command, id string) (string, error) {
+// With max > 0 and max reviewers alive it queues id instead (ErrQueued).
+// When the command exits, `shp review --next` starts the oldest queued one.
+func Spawn(s *store.Store, command, id string, max int) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", errors.New("no reviewer command configured (reviewer.command in .sherpa/config.yaml)")
 	}
@@ -77,6 +125,19 @@ func Spawn(s *store.Store, command, id string) (string, error) {
 	}
 	if err := os.MkdirAll(dir(s), 0o755); err != nil {
 		return "", err
+	}
+	if max > 0 && Count(s, os.Getenv("SHERPA_REVIEW")) >= max {
+		if err := os.WriteFile(filepath.Join(dir(s), id+".queued"), nil, 0o644); err != nil {
+			return "", err
+		}
+		return "", ErrQueued
+	}
+	Dequeue(s, id)
+	if max > 0 {
+		if self, err := Self(); err == nil {
+			// Start the next queued reviewer however this one ends.
+			command = "(" + command + "); " + shellQuote(self) + " review --next"
+		}
 	}
 	logPath := filepath.Join(dir(s), id+".log")
 	log, err := os.Create(logPath)
@@ -101,6 +162,8 @@ func Spawn(s *store.Store, command, id string) (string, error) {
 	_ = os.WriteFile(filepath.Join(dir(s), id+".pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
 	return logPath, cmd.Process.Release()
 }
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // env drops the variables that would make the reviewer look like the author:
 // its actor and session are set explicitly, and an agent CLI launched from

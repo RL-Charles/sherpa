@@ -34,7 +34,7 @@ func TestSpawn(t *testing.T) {
 	t.Setenv("CLAUDECODE", "1")
 	out := filepath.Join(root, "out")
 	cmd := `env | grep -E '^(SHERPA|CLAUDECODE)' | sort > ` + out + `.env; cat > ` + out + `.tmp && mv ` + out + `.tmp ` + out
-	if _, err := Spawn(s, cmd, "T-0007"); err != nil {
+	if _, err := Spawn(s, cmd, "T-0007", 0); err != nil {
 		t.Fatal(err)
 	}
 	if prompt := waitFor(t, out); !strings.Contains(prompt, "shp review T-0007 --pass") {
@@ -56,7 +56,45 @@ func TestSpawnNeedsCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Spawn(s, " ", "T-0001"); err == nil {
+	if _, err := Spawn(s, " ", "T-0001", 0); err == nil {
 		t.Fatal("an empty command must not launch anything")
 	}
+}
+
+func TestSpawnQueuesPastMax(t *testing.T) {
+	root := t.TempDir()
+	s, err := store.Init(root, "RV", "rv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := filepath.Join(root, "hold")
+	next := filepath.Join(root, "next")
+	fake := filepath.Join(root, "fake shp")
+	_ = os.WriteFile(fake, []byte("#!/bin/sh\n[ \"$*\" = \"review --next\" ] && touch "+next+"\n"), 0o755)
+	Self = func() (string, error) { return fake, nil }
+	t.Cleanup(func() { Self = os.Executable })
+	cmd := `while [ ! -e ` + hold + ` ]; do sleep 0.05; done`
+	if _, err := Spawn(s, cmd, "T-0001", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Spawn(s, cmd, "T-0002", 1); err != ErrQueued {
+		t.Fatalf("second reviewer past max should queue, got %v", err)
+	}
+	if got := Queued(s); len(got) != 1 || got[0] != "T-0002" {
+		t.Fatalf("queue = %v", got)
+	}
+	if n := Count(s, ""); n != 1 {
+		t.Fatalf("running = %d", n)
+	}
+	if n := Count(s, "T-0001"); n != 0 {
+		t.Fatalf("a finishing reviewer must not count itself, got %d", n)
+	}
+	_ = os.WriteFile(hold, nil, 0o644)
+	for range 100 {
+		if _, err := os.Stat(next); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("a capped reviewer must run `review --next` when it exits")
 }
