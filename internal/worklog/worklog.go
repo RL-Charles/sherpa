@@ -606,3 +606,7 @@ func LastAgentContext(events []journal.Event) (actor, agentSession, branch, work
 	}
 	return actor, agentSession, branch, worktree
 }
+
+// Summary is the one-line shape of a session (plan → decisions → verified →
+// submitted), for callers outside the package such as the desktop app feed.
+func Summary(s Session) string { return sessionSummary(s) }

@@ -98,6 +98,7 @@ func newRoot(a *app) *cobra.Command {
 		a.backfillCmd(),
 		a.searchCmd(),
 		a.policyCmd(),
+		a.appCmd(),
 	)
 	return root
 }
