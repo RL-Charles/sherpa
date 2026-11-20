@@ -6,12 +6,15 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/RL-Charles/sherpa/internal/journal"
 	"github.com/RL-Charles/sherpa/internal/model"
+	"github.com/RL-Charles/sherpa/internal/render"
+	"github.com/RL-Charles/sherpa/internal/worklog"
 )
 
 // Brief is the compact context a reader or an agent needs before touching a
-// ticket: outcome, deliverables, next open check, code map and the authored
-// context. Full prose stays in `shp show`.
+// ticket: outcome, deliverables, next open check, code map, handoff/signals
+// and the authored context. Full prose stays in `shp show`.
 type Brief struct {
 	ID           string             `json:"id"`
 	Title        string             `json:"title"`
@@ -20,12 +23,15 @@ type Brief struct {
 	Parent       string             `json:"parent,omitempty"`
 	Assignee     string             `json:"assignee,omitempty"`
 	Now          string             `json:"now,omitempty"`
+	Handoff      *model.Handoff     `json:"handoff,omitempty"`
 	Outcome      string             `json:"outcome"`
 	ChecksDone   int                `json:"checks_done"`
 	ChecksTotal  int                `json:"checks_total"`
 	Unlinked     int                `json:"unlinked_checks,omitempty"`
 	Deliverables []BriefDeliverable `json:"deliverables,omitempty"`
 	Where        []model.CodeRef    `json:"where,omitempty"`
+	OffPlan      []string           `json:"off_plan,omitempty"`
+	Signals      []string           `json:"signals,omitempty"`
 	NextCheck    string             `json:"next_check,omitempty"`
 	Context      []string           `json:"context,omitempty"`
 	Design       []string           `json:"design,omitempty"`
@@ -68,7 +74,11 @@ reviewer should read before opening the diff.`,
 			if err != nil {
 				return err
 			}
-			b := BuildBrief(it)
+			var events []journal.Event
+			if allEv, err := journal.ReadAll(a.store.Dir); err == nil {
+				events = journal.ForItem(allEv, it.ID)
+			}
+			b := BuildBriefWithEvents(it, events)
 			if a.json {
 				return a.emit(b)
 			}
@@ -78,9 +88,15 @@ reviewer should read before opening the diff.`,
 	}
 }
 
-// BuildBrief assembles the compact view. It deliberately reuses the same
-// lint rules so the gaps an agent sees are the gaps a reviewer sees.
+// BuildBrief assembles the compact view without journal reconciliation.
 func BuildBrief(it *model.Item) Brief {
+	return BuildBriefWithEvents(it, nil)
+}
+
+// BuildBriefWithEvents assembles the compact view, reconciling Where against
+// touched files and surfacing recent high-signal journal events.
+func BuildBriefWithEvents(it *model.Item, events []journal.Event) Brief {
+	where, offPlan := model.ReconcileCode(it.Code, worklog.TouchedFiles(events))
 	b := Brief{
 		ID:       it.ID,
 		Title:    it.Title,
@@ -89,7 +105,17 @@ func BuildBrief(it *model.Item) Brief {
 		Parent:   it.Parent,
 		Assignee: it.Assignee,
 		Now:      it.Now,
-		Where:    it.Code,
+		Handoff:  it.Handoff,
+		Where:    where,
+		OffPlan:  offPlan,
+	}
+	for _, e := range worklog.RecentSignals(events, 4) {
+		icon, _, head, _ := worklog.Describe(e)
+		line := icon + " " + truncateText(head, 120)
+		if age := render.Age(e.TS); age != "" {
+			line += " (" + age + ")"
+		}
+		b.Signals = append(b.Signals, line)
 	}
 	b.ChecksDone, b.ChecksTotal = it.CheckCounts()
 	for _, c := range it.UnlinkedChecks() {
@@ -169,6 +195,30 @@ func RenderBrief(b Brief) string {
 	if b.Now != "" && b.Now != b.Outcome {
 		fmt.Fprintf(&out, "Now      %s\n", truncateText(b.Now, 240))
 	}
+	if h := b.Handoff; !h.Empty() {
+		if h.Next != "" {
+			fmt.Fprintf(&out, "Next     %s\n", truncateText(h.Next, 200))
+		}
+		if h.Blocker != "" {
+			fmt.Fprintf(&out, "Blocker  ⛔ %s\n", truncateText(h.Blocker, 200))
+		}
+		var ctx []string
+		if h.Agent != "" {
+			ctx = append(ctx, "@"+h.Agent)
+		}
+		if h.SessionID != "" {
+			ctx = append(ctx, "session:"+h.SessionID)
+		}
+		if h.Branch != "" {
+			ctx = append(ctx, "branch:"+h.Branch)
+		}
+		if h.Worktree != "" && h.Worktree != "main" {
+			ctx = append(ctx, "wt:"+h.Worktree)
+		}
+		if len(ctx) > 0 {
+			fmt.Fprintf(&out, "Session  %s\n", strings.Join(ctx, " · "))
+		}
+	}
 
 	if len(b.Deliverables) == 0 {
 		out.WriteString("Deliverables  none yet\n")
@@ -226,6 +276,21 @@ func RenderBrief(b Brief) string {
 			}
 			line += " · " + state
 			out.WriteString(line + "\n")
+		}
+	}
+	if len(b.OffPlan) > 0 {
+		shown := b.OffPlan
+		extra := ""
+		if len(shown) > 5 {
+			extra = fmt.Sprintf(" (+%d more)", len(shown)-5)
+			shown = shown[:5]
+		}
+		fmt.Fprintf(&out, "  △ off-plan touched: %s%s\n", strings.Join(shown, ", "), extra)
+	}
+	if len(b.Signals) > 0 {
+		out.WriteString("\nRecent signals\n")
+		for _, s := range b.Signals {
+			out.WriteString("  " + s + "\n")
 		}
 	}
 	if len(b.Context) > 0 {

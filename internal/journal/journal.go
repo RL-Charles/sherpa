@@ -33,12 +33,15 @@ type Event struct {
 	// Status to done only: the human who approved an agent closing the item.
 	ApprovedBy string `json:"approved_by,omitempty"`
 
-	// Git context when the event was recorded. Commit is HEAD (short sha);
-	// Added/Removed are line counts for Files relative to the commit the
-	// work session started from, including uncommitted changes.
-	Commit  string `json:"commit,omitempty"`
-	Added   int    `json:"added,omitempty"`
-	Removed int    `json:"removed,omitempty"`
+	// Git and agent session context when the event was recorded. Commit is HEAD
+	// (short sha); Added/Removed are line counts for Files relative to the commit
+	// the work session started from, including uncommitted changes.
+	Commit       string `json:"commit,omitempty"`
+	Added        int    `json:"added,omitempty"`
+	Removed      int    `json:"removed,omitempty"`
+	AgentSession string `json:"agent_session,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	Worktree     string `json:"worktree,omitempty"`
 }
 
 // Log entry kinds.

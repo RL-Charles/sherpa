@@ -23,9 +23,14 @@ import (
 const Stale = 2 * time.Minute
 
 type Pulse struct {
-	Agent  string    `json:"agent"`
-	Ticket string    `json:"ticket,omitempty"`
-	TS     time.Time `json:"ts"`
+	Agent     string    `json:"agent"`
+	SessionID string    `json:"session_id,omitempty"`
+	Ticket    string    `json:"ticket,omitempty"`
+	Action    string    `json:"action,omitempty"`
+	File      string    `json:"file,omitempty"`
+	Worktree  string    `json:"worktree,omitempty"`
+	Branch    string    `json:"branch,omitempty"`
+	TS        time.Time `json:"ts"`
 }
 
 func dir(sherpaDir string) string { return filepath.Join(sherpaDir, ".local", "working") }
@@ -35,11 +40,26 @@ func path(s *store.Store) string { return filepath.Join(dir(s.Dir), s.CheckoutKe
 // Touch records that agent is working in this checkout, on ticket if known.
 // An empty ticket keeps the one already recorded.
 func Touch(s *store.Store, agent, ticket string) error {
-	p := Pulse{Agent: agent, Ticket: ticket, TS: time.Now().UTC()}
-	if ticket == "" {
-		if prev, ok := read(path(s)); ok && prev.Agent == agent {
+	return TouchInfo(s, Pulse{Agent: agent, Ticket: ticket})
+}
+
+// TouchInfo records rich live agent activity for this checkout, preserving
+// previously recorded ticket/session/branch when omitted on a lighter heartbeat.
+func TouchInfo(s *store.Store, p Pulse) error {
+	p.TS = time.Now().UTC()
+	if prev, ok := read(path(s)); ok && prev.Agent == p.Agent {
+		if p.Ticket == "" {
 			p.Ticket = prev.Ticket
 		}
+		if p.SessionID == "" {
+			p.SessionID = prev.SessionID
+		}
+		if p.Branch == "" {
+			p.Branch = prev.Branch
+		}
+	}
+	if p.Worktree == "" {
+		p.Worktree = s.CheckoutKey()
 	}
 	data, err := json.Marshal(p)
 	if err != nil {

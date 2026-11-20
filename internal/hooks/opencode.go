@@ -18,13 +18,15 @@ func init() { Adapters["opencode"] = opencode{} }
 func (opencode) Parse(ev Event, payload []byte) Input {
 	var p struct {
 		Dir        string   `json:"dir"`
+		SessionID  string   `json:"session_id"`
+		Tool       string   `json:"tool"`
 		Files      []string `json:"files"`
 		StopActive bool     `json:"stopActive"`
 		Command    string   `json:"command"`
 		Output     string   `json:"output"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	return Input{Dir: p.Dir, Files: p.Files, StopActive: p.StopActive, Command: p.Command, Output: p.Output}
+	return Input{Dir: p.Dir, SessionID: p.SessionID, Tool: p.Tool, Files: p.Files, StopActive: p.StopActive, Command: p.Command, Output: p.Output}
 }
 
 func (opencode) Write(ev Event, out Output, stdout, _ io.Writer) int {

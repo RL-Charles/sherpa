@@ -84,6 +84,7 @@ func newRoot(a *app) *cobra.Command {
 		a.hookCmd(),
 		a.hooksCmd(),
 		a.nowCmd(),
+		a.handoffCmd(),
 		a.checkCmd(),
 		a.checksCmd(),
 		a.deliverableCmd(),
@@ -125,10 +126,26 @@ func (a *app) load() error {
 func (a *app) record(e journal.Event) error {
 	e.Actor = a.actor.String()
 	e.Session = a.session
+	if e.AgentSession == "" {
+		e.AgentSession = agentSessionID()
+	}
+	if e.Branch == "" {
+		e.Branch = gitinfo.Branch(a.store.CodeRoot)
+	}
+	if e.Worktree == "" {
+		e.Worktree = a.store.CheckoutKey()
+	}
 	if a.actor.Kind == workflow.Agent { // the TUI's live "working" indicator
 		switch e.Type {
-		case "claim", "log":
-			_ = live.Touch(a.store, a.actor.Name, e.Item)
+		case "claim", "log", "handoff":
+			_ = live.TouchInfo(a.store, live.Pulse{
+				Agent:     a.actor.Name,
+				SessionID: e.AgentSession,
+				Ticket:    e.Item,
+				Action:    e.Type,
+				Worktree:  e.Worktree,
+				Branch:    e.Branch,
+			})
 		case "submit":
 			_ = live.Clear(a.store)
 		}

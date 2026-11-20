@@ -21,6 +21,7 @@ import (
 // live preview).
 type editor struct {
 	header, footer string   // pinned header and read-only footer markdown
+	pinnedRaw      []string // pre-rendered compact pinned header lines (replaces header markdown when set)
 	lead           string   // read-only markdown between the pinned header and body
 	tail           []string // pre-rendered lines after the footer (the worklog)
 	lines          []string // the body, one entry per source line
@@ -65,10 +66,11 @@ func (e *editor) setDoc(header, body, footer string, reset bool) {
 	e.setParts(header, "", body, footer, reset)
 }
 
-// setParts is setDoc with a scrollable lead block (the review card) between
-// the pinned header and the editable body.
+// setParts is setDoc with a scrollable lead block (the review card / snapshot)
+// between the pinned header and the editable body.
 func (e *editor) setParts(header, lead, body, footer string, reset bool) {
 	e.header, e.lead, e.footer = header, lead, footer
+	e.pinnedRaw = nil
 	e.lines = strings.Split(strings.TrimRight(body, "\n"), "\n")
 	if reset {
 		e.offset, e.row, e.col = 0, 0, 0
@@ -239,6 +241,9 @@ func (e *editor) renderTableCached(src []string) ([]string, bool) {
 // pinnedLines renders the read-only header once per width. It stays above
 // the scroll region so the ticket title and status never leave the screen.
 func (e *editor) pinnedLines() []string {
+	if len(e.pinnedRaw) > 0 {
+		return e.pinnedRaw
+	}
 	if strings.TrimSpace(e.header) == "" {
 		return nil
 	}
@@ -249,6 +254,56 @@ func (e *editor) pinnedLines() []string {
 	out := e.renderStatic(e.header)
 	e.cache[key] = out
 	return out
+}
+
+// sectionOffsets locates major section headings in the laid-out preview so
+// `[` and `]` can jump cleanly across long tickets.
+func (e *editor) sectionOffsets(out []string) (offsets []int, names []string) {
+	for i, l := range out {
+		plain := strings.TrimSpace(ansi.Strip(l))
+		if strings.HasPrefix(plain, "────────") && i+1 < len(out) {
+			next := strings.TrimSpace(ansi.Strip(out[i+1]))
+			if next != "" {
+				if idx := strings.Index(next, " · "); idx > 0 {
+					next = next[:idx]
+				}
+				offsets = append(offsets, i)
+				names = append(names, next)
+			}
+		} else if strings.HasPrefix(plain, "Worklog") {
+			offsets = append(offsets, i)
+			names = append(names, "Worklog")
+		}
+	}
+	return offsets, names
+}
+
+// jumpSection moves the preview viewport to the next (delta > 0) or previous
+// (delta < 0) section heading.
+func (e *editor) jumpSection(delta int) {
+	out, _, _ := e.layout()
+	offsets, _ := e.sectionOffsets(out)
+	if len(offsets) == 0 {
+		return
+	}
+	maxOff := max(0, len(out)-e.visibleHeight())
+	if delta > 0 {
+		for _, off := range offsets {
+			if off > e.offset {
+				e.offset = min(off, maxOff)
+				return
+			}
+		}
+		e.offset = maxOff
+		return
+	}
+	for i := len(offsets) - 1; i >= 0; i-- {
+		if offsets[i] < e.offset {
+			e.offset = offsets[i]
+			return
+		}
+	}
+	e.offset = 0
 }
 
 // pinnedHeight is the number of rows reserved for the header, including its
@@ -392,7 +447,8 @@ func (e *editor) View() string {
 	if maxPin := max(1, e.height/2); len(pin) > maxPin {
 		pin = append(append([]string{}, pin[:maxPin-1]...), faint.Render("…"))
 	}
-	return strings.Join(pin, "\n") + "\n\n" + body
+	sep := faint.Render(strings.Repeat("─", max(1, e.width)))
+	return strings.Join(pin, "\n") + "\n" + sep + "\n" + body
 }
 
 // follow scrolls so the cursor stays visible, with a little context.

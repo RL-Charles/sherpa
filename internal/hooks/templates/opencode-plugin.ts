@@ -54,54 +54,69 @@ export default {
         )
       })
 
-    // Tag the agent's own shell commands so `shp` knows an agent is calling.
+    // Tag the agent's own shell commands so `shp` knows the actor and session.
     await ctx.shell.hook("create.before", (event: any) => {
       event.env.SHERPA_ACTOR = "agent:opencode"
+      const sid = String(event.sessionID ?? event.env.OPENCODE_SESSION_ID ?? "")
+      if (sid) {
+        event.env.SHERPA_AGENT_SESSION = sid
+        if (!event.env.SHERPA_SESSION) event.env.SHERPA_SESSION = `opencode-${sid}`
+      }
     })
 
-    // Session start: fetch Sherpa's context once per session and add it to
-    // every model request (V2 request edits are not persisted).
+    // Session context: fetch Sherpa's resume brief and keep it fresh after
+    // ticket switches or state updates (`shp start`, `shp handoff`, `shp submit`, etc.).
     await ctx.session.hook("context", async (event: any) => {
       const id = String(event.sessionID ?? "")
-      if (!context.has(id)) context.set(id, (await shp("session-start", {})).out)
+      if (!context.has(id)) context.set(id, (await shp("session-start", { session_id: id })).out)
       const text = context.get(id)
       if (text) event.system.push({ type: "text", text })
     })
 
     // Heartbeat for the Sherpa TUI's live "working" indicator.
-    await ctx.session.hook("prompt", () => {
-      void shp("working", {})
+    await ctx.session.hook("prompt", (event: any) => {
+      void shp("working", { session_id: String(event?.sessionID ?? "") })
     })
 
     await ctx.tool.hook("execute.before", async (event: any) => {
+      const sid = String(event.sessionID ?? "")
       if (!EDIT_TOOLS.has(event.tool)) {
-        void shp("working", {})
+        void shp("working", { session_id: sid, tool: String(event.tool ?? "") })
         return
       }
-      const r = await shp("pre-edit", { files: filesOf(directory, event.tool, event.input) })
+      const files = filesOf(directory, event.tool, event.input)
+      const r = await shp("pre-edit", { session_id: sid, tool: String(event.tool ?? ""), files })
       if (r.code === 2) throw new Error(r.out)
     })
 
     await ctx.tool.hook("execute.after", async (event: any) => {
       if (event.status !== "completed") return
+      const sid = String(event.sessionID ?? "")
       if (event.tool === "shell") {
-        // Link pull requests the agent opens with gh.
         const command = String(event.input?.command ?? "")
-        if (command.includes("gh pr")) await shp("post-shell", { command, output: textOf(event.result) })
+        // Refresh cached context whenever the agent mutates Sherpa state.
+        if (/\b(?:shp|sherpa)\s+(?:start|submit|done|handoff|now|log|check|deliverable|where|status|review)\b/.test(command)) {
+          context.delete(sid)
+        }
+        // Link pull requests the agent opens with gh.
+        if (command.includes("gh pr")) {
+          await shp("post-shell", { session_id: sid, tool: "shell", command, output: textOf(event.result) })
+          context.delete(sid)
+        }
         return
       }
       if (!EDIT_TOOLS.has(event.tool)) return
-      await shp("post-edit", { files: filesOf(directory, event.tool, event.input) })
+      await shp("post-edit", { session_id: sid, tool: String(event.tool ?? ""), files: filesOf(directory, event.tool, event.input) })
     })
 
-    // Before a session goes idle, let Sherpa ask the agent to log or submit.
+    // Before a session goes idle, let Sherpa ask the agent to log, handoff or submit.
     // A synthetic message admitted here runs in the same execution.
     await ctx.session.hook("experimental.idle", async (event: any) => {
       const id = event.sessionID
       const s = await ctx.session.get({ sessionID: id }).catch(() => undefined)
       if (s?.parentID ?? s?.data?.parentID) return // subagent sessions
       const count = nudged.get(id) ?? 0
-      const r = await shp("stop", { stopActive: count > 0 })
+      const r = await shp("stop", { session_id: String(id ?? ""), stopActive: count > 0 })
       if (r.code === 2 && r.out && count < 2) {
         nudged.set(id, count + 1)
         await ctx.session.synthetic({ sessionID: id, text: r.out })

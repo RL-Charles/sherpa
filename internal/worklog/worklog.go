@@ -19,6 +19,8 @@ import (
 type Session struct {
 	N              int // 1-based; 0 is the planning group before the first claim
 	Actor          string
+	AgentSession   string // native agent session ID when captured
+	Branch         string // git branch when captured
 	Start, End     time.Time
 	Base, Head     string // commit the session started from / last seen
 	Added, Removed int    // totals recorded at submit
@@ -56,11 +58,17 @@ func Build(events []journal.Event) []Session {
 		if e.Type == "claim" {
 			flush()
 			n++
-			cur = Session{N: n, Actor: e.Actor, Start: e.TS, Base: e.Commit, Head: e.Commit, Open: true}
+			cur = Session{N: n, Actor: e.Actor, AgentSession: e.AgentSession, Branch: e.Branch, Start: e.TS, Base: e.Commit, Head: e.Commit, Open: true}
 		}
 		if len(cur.Entries) == 0 && cur.Start.IsZero() {
 			cur.Start = e.TS
 			cur.Actor = e.Actor
+		}
+		if e.AgentSession != "" && cur.AgentSession == "" {
+			cur.AgentSession = e.AgentSession
+		}
+		if e.Branch != "" {
+			cur.Branch = e.Branch
 		}
 		cur.Entries = append(cur.Entries, e)
 		cur.End = e.TS
@@ -211,6 +219,12 @@ func describe(e journal.Event, hideSubmit bool) (icon, color, headline string, d
 			return "◐", "yellow", "back in progress", detail
 		}
 		return "→", "", e.From + " → " + e.To, detail
+	case "handoff":
+		h := e.Message
+		if h == "" {
+			h = "paused / handoff"
+		}
+		return "↪", "yellow", h, detail
 	case "log":
 		switch e.Kind {
 		case journal.KindDecision:
@@ -394,6 +408,16 @@ func sessionHeader(s Session, expanded bool) string {
 	case s.Head != "":
 		parts = append(parts, "@"+s.Head)
 	}
+	if s.AgentSession != "" {
+		sid := s.AgentSession
+		if len(sid) > 14 {
+			sid = sid[:14]
+		}
+		parts = append(parts, sid)
+	}
+	if s.Branch != "" {
+		parts = append(parts, s.Branch)
+	}
 	line := arrow + " " + strings.Join(parts, faint.Render(" · "))
 	if st := stats(s.Added, s.Removed); st != "" {
 		line += "  " + st
@@ -402,11 +426,15 @@ func sessionHeader(s Session, expanded bool) string {
 		line += "  " + openTag.Render("in progress")
 	}
 	if !expanded {
-		n := fmt.Sprintf("  %d entries", len(s.Entries))
-		if len(s.Entries) == 1 {
-			n = "  1 entry"
+		if sum := sessionSummary(s); sum != "" {
+			line += faint.Render("  " + sum)
+		} else {
+			n := fmt.Sprintf("  %d entries", len(s.Entries))
+			if len(s.Entries) == 1 {
+				n = "  1 entry"
+			}
+			line += faint.Render(n)
 		}
-		line += faint.Render(n)
 	}
 	return line
 }
@@ -497,4 +525,84 @@ func LastReview(events []journal.Event) (journal.Event, bool) {
 		}
 	}
 	return journal.Event{}, false
+}
+
+// TouchedFiles returns unique file paths touched or logged on an item across
+// its journal events, in first-seen order.
+func TouchedFiles(events []journal.Event) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range events {
+		if e.Type != "touch" && e.Type != "log" && e.Type != "handoff" && e.Type != "submit" {
+			continue
+		}
+		for _, f := range e.Files {
+			if f == "" || seen[f] {
+				continue
+			}
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// RecentSignals returns up to max most recent high-signal events (handoff,
+// blocker, review reject, decision, verify) newest first, so humans and
+// resuming agents immediately see key context without reading 100+ log lines.
+func RecentSignals(events []journal.Event, limit int) []journal.Event {
+	if limit <= 0 {
+		return nil
+	}
+	var out []journal.Event
+	seen := map[string]bool{}
+	for i := len(events) - 1; i >= 0 && len(out) < limit; i-- {
+		e := events[i]
+		if !isSignal(e) {
+			continue
+		}
+		key := e.Type + ":" + e.Kind + ":" + strings.TrimSpace(e.Message)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, e)
+	}
+	return out
+}
+
+func isSignal(e journal.Event) bool {
+	switch e.Type {
+	case "handoff":
+		return true
+	case "review":
+		return e.Kind == "reject"
+	case "log":
+		return e.Kind == journal.KindDecision || e.Kind == journal.KindBlocker || e.Kind == journal.KindVerify
+	}
+	return false
+}
+
+// LastAgentContext returns the most recent non-empty actor, agent session ID,
+// branch and worktree recorded in an item's journal.
+func LastAgentContext(events []journal.Event) (actor, agentSession, branch, worktree string) {
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if actor == "" && e.Actor != "" {
+			actor = actorName(e.Actor)
+		}
+		if agentSession == "" && e.AgentSession != "" {
+			agentSession = e.AgentSession
+		}
+		if branch == "" && e.Branch != "" {
+			branch = e.Branch
+		}
+		if worktree == "" && e.Worktree != "" {
+			worktree = e.Worktree
+		}
+		if actor != "" && agentSession != "" && branch != "" && worktree != "" {
+			break
+		}
+	}
+	return actor, agentSession, branch, worktree
 }

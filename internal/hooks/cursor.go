@@ -20,6 +20,8 @@ func init() { Adapters["cursor"] = cursor{} }
 func (cursor) Parse(ev Event, payload []byte) Input {
 	var p struct {
 		Cwd            string   `json:"cwd"`
+		SessionID      string   `json:"conversation_id"`
+		ToolName       string   `json:"tool_name"`
 		WorkspaceRoots []string `json:"workspace_roots"`
 		FilePath       string   `json:"file_path"`
 		LoopCount      int      `json:"loop_count"`
@@ -30,7 +32,7 @@ func (cursor) Parse(ev Event, payload []byte) Input {
 		} `json:"tool_input"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	in := Input{Dir: p.Cwd, StopActive: p.LoopCount > 0}
+	in := Input{Dir: p.Cwd, SessionID: p.SessionID, Tool: p.ToolName, StopActive: p.LoopCount > 0}
 	if in.Dir == "" && len(p.WorkspaceRoots) > 0 {
 		in.Dir = p.WorkspaceRoots[0]
 	}

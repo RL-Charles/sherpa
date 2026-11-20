@@ -115,6 +115,63 @@ func TestSessionContext(t *testing.T) {
 	}
 }
 
+func TestSessionContextResumeCardAndRecency(t *testing.T) {
+	s, root := project(t)
+	it, _ := s.Get("T-0001")
+	it.Status = model.InProgress
+	it.Now = "Parser wired; 1 edge case left"
+	it.Handoff = &model.Handoff{
+		Next:      "Add nested table test",
+		Blocker:   "Need sample fixture",
+		Agent:     "opencode",
+		SessionID: "ses_resume42",
+		Branch:    "feat/t0001",
+	}
+	it.Code = []model.CodeRef{{Path: "pkg/a.go", Change: "modify", Status: "planned"}}
+	it.Deliverables = []model.Deliverable{
+		{Text: "Done 1", Done: true},
+		{Text: "Done 2", Done: true},
+		{Text: "Done 3", Done: true},
+		{Text: "Open 4", Done: false},
+	}
+	_ = s.Save(it)
+	_ = s.SetActive("T-0001")
+	_ = journal.Append(s.Dir, journal.Event{Actor: "agent:opencode", Session: "s1", Item: "T-0001", Type: "touch", Files: []string{"pkg/a.go", "pkg/extra.go"}})
+	_ = journal.Append(s.Dir, journal.Event{Actor: "agent:opencode", Session: "s1", Item: "T-0001", Type: "log", Kind: journal.KindDecision, Message: "Use streaming parser"})
+
+	// Add a stale in-progress ticket (>14d old) and a fresh one.
+	stale, _ := s.Create(store.NewItem{Kind: model.Ticket, Title: "Ancient ghost", Parent: "S-001"})
+	stale.Status = model.InProgress
+	stale.Updated = time.Now().Add(-30 * 24 * time.Hour)
+	_ = s.Write(stale)
+	fresh, _ := s.Create(store.NewItem{Kind: model.Ticket, Title: "Fresh ticket", Parent: "S-001"})
+	fresh.Status = model.InProgress
+	_ = s.Save(fresh)
+
+	out := Handle(Input{Agent: "opencode", Event: SessionStart, Dir: root})
+	for _, want := range []string{
+		"E-001 E › S-001 S",
+		"now: Parser wired; 1 edge case left",
+		"next: Add nested table test",
+		"blocker: ⛔ Need sample fixture",
+		"session ses_resume42",
+		"✓ 3 done",
+		"○ 4. Open 4",
+		"pkg/a.go [touched]",
+		"△ off-plan touched: pkg/extra.go",
+		"⚑ Use streaming parser",
+		"Fresh ticket",
+		"1 stale >14d",
+	} {
+		if !strings.Contains(out.Context, want) {
+			t.Errorf("resume context missing %q:\n%s", want, out.Context)
+		}
+	}
+	if strings.Contains(out.Context, "Ancient ghost") {
+		t.Errorf("stale >14d ticket should be collapsed when fresh ones exist:\n%s", out.Context)
+	}
+}
+
 func TestPostShellLinksPR(t *testing.T) {
 	s, root := project(t)
 	out := `{"tool_response":{"stdout":"https://github.com/acme/app/pull/42\n"}}`

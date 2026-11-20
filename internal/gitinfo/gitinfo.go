@@ -97,6 +97,25 @@ func Branch(dir string) string {
 	return b
 }
 
+// WorktreePaths returns the absolute top-level paths of every git worktree in
+// the repository containing dir, or nil outside git.
+func WorktreePaths(dir string) []string {
+	out, err := git(dir, "worktree", "list", "--porcelain")
+	if err != nil || out == "" {
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		if p, ok := strings.CutPrefix(line, "worktree "); ok {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				paths = append(paths, filepath.Clean(p))
+			}
+		}
+	}
+	return paths
+}
+
 // Commit stages files (new, changed or deleted) and commits only those paths
 // with msg, leaving anything else staged or dirty alone. It returns the new
 // short sha, or "" when the files have nothing to commit.

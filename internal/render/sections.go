@@ -11,6 +11,7 @@ import (
 
 	"github.com/RL-Charles/sherpa/internal/journal"
 	"github.com/RL-Charles/sherpa/internal/model"
+	"github.com/RL-Charles/sherpa/internal/worklog"
 )
 
 // Bar draws a 10-cell progress bar.
@@ -151,6 +152,12 @@ func cell(s string) string { return strings.ReplaceAll(strings.ReplaceAll(s, "|"
 // Visual (generated, stories and epics without their own), Measurables,
 // Work done and Checks. Children go between Work done and Checks.
 func Sections(it *model.Item, all []*model.Item, kids []*model.Item) string {
+	return TailSections(it, all, kids, false)
+}
+
+// TailSections is Sections with an option to omit Deliverables and Where when
+// Snapshot already rendered them above the prose body.
+func TailSections(it *model.Item, all []*model.Item, kids []*model.Item, skipStructured bool) string {
 	var b strings.Builder
 	autoVisual := false
 	if it.Kind != model.Ticket {
@@ -159,7 +166,7 @@ func Sections(it *model.Item, all []*model.Item, kids []*model.Item) string {
 			autoVisual = true // it lists every child, so the Children list would repeat it
 		}
 	}
-	if len(it.Deliverables) > 0 {
+	if !skipStructured && len(it.Deliverables) > 0 {
 		done, total := it.DeliverableCounts()
 		fmt.Fprintf(&b, "\n\n## Deliverables · %d/%d\n", done, total)
 		for i, d := range it.Deliverables {
@@ -189,7 +196,7 @@ func Sections(it *model.Item, all []*model.Item, kids []*model.Item) string {
 			}
 		}
 	}
-	if len(it.Code) > 0 {
+	if !skipStructured && len(it.Code) > 0 {
 		fmt.Fprintf(&b, "\n\n## Where\n\n```text\n%s\n```\n", CodeMap(it))
 	}
 	if len(it.Measures) > 0 {
@@ -312,7 +319,14 @@ func writeCheck(b *strings.Builder, c model.Check, showFor bool) {
 // CodeMap renders the planned code map as a directory-grouped text tree. It
 // is deliberately preformatted: paths, symbols and notes stay aligned.
 func CodeMap(it *model.Item) string {
-	refs := append([]model.CodeRef(nil), it.Code...)
+	return CodeMapReconciled(it.Code, nil)
+}
+
+// CodeMapReconciled renders code refs reconciled against journal touched files,
+// appending any off-plan touched files as a drift summary.
+func CodeMapReconciled(code []model.CodeRef, touched []string) string {
+	reconciled, offPlan := model.ReconcileCode(code, touched)
+	refs := append([]model.CodeRef(nil), reconciled...)
 	sort.SliceStable(refs, func(i, j int) bool {
 		return filepath.ToSlash(refs[i].Path) < filepath.ToSlash(refs[j].Path)
 	})
@@ -380,7 +394,172 @@ func CodeMap(it *model.Item) string {
 			b.WriteString("    note: " + r.Note + "\n")
 		}
 	}
+	if len(offPlan) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		shown := offPlan
+		extra := ""
+		if len(shown) > 5 {
+			extra = fmt.Sprintf(" (+%d more)", len(shown)-5)
+			shown = shown[:5]
+		}
+		fmt.Fprintf(&b, "△ %d off-plan touched: %s%s\n", len(offPlan), strings.Join(shown, ", "), extra)
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// Snapshot builds the scannable at-a-glance overview shown above long prose in
+// the TUI preview: Recent signals & session context, Deliverables (done
+// collapsed, open expanded), and reconciled Where code map. When compact is
+// true (Brief mode), completed deliverables fold into one summary line so the
+// entire ticket brief fits on one screen.
+func Snapshot(it *model.Item, events []journal.Event, compact bool) string {
+	if it.Kind != model.Ticket {
+		return ""
+	}
+	touched := worklog.TouchedFiles(events)
+	signals := worklog.RecentSignals(events, 3)
+	hasCode := len(it.Code) > 0 || len(touched) > 0
+	if len(it.Deliverables) == 0 && !hasCode && len(signals) == 0 && it.Handoff.Empty() {
+		return ""
+	}
+	var b strings.Builder
+
+	// 1. Recent signals & session context (latest decisions/blockers/rejects/handoff).
+	if len(signals) > 0 || !it.Handoff.Empty() {
+		sessions := worklog.Build(events)
+		workSessions := 0
+		for _, s := range sessions {
+			if s.N > 0 {
+				workSessions++
+			}
+		}
+		heading := "Recent signals"
+		if workSessions > 0 {
+			heading = fmt.Sprintf("Recent signals · %d sessions · %d events", workSessions, len(events))
+		}
+		fmt.Fprintf(&b, "## %s\n\n", heading)
+		actor, sid, br, wt := worklog.LastAgentContext(events)
+		if h := it.Handoff; !h.Empty() {
+			if h.Agent != "" {
+				actor = h.Agent
+			}
+			if h.SessionID != "" {
+				sid = h.SessionID
+			}
+			if h.Branch != "" {
+				br = h.Branch
+			}
+			if h.Worktree != "" {
+				wt = h.Worktree
+			}
+		}
+		if br == "" && it.Links != nil {
+			br = it.Links.Branch
+		}
+		var ctx []string
+		if actor != "" {
+			ctx = append(ctx, "@"+actor)
+		}
+		if sid != "" {
+			ctx = append(ctx, "`"+short(sid, 18)+"`")
+		}
+		if br != "" {
+			ctx = append(ctx, "`"+br+"`")
+		}
+		if wt != "" && wt != "main" {
+			ctx = append(ctx, "wt:`"+wt+"`")
+		}
+		if len(ctx) > 0 {
+			fmt.Fprintf(&b, "_Last context: %s_\n\n", strings.Join(ctx, " · "))
+		}
+		for _, e := range signals {
+			icon, _, head, _ := worklog.Describe(e)
+			age := Age(e.TS)
+			if age != "" {
+				age = " · _" + age + "_"
+			}
+			fmt.Fprintf(&b, "- %s %s%s\n", icon, short(head, 80), age)
+		}
+		b.WriteString("\n")
+	}
+
+	// 2. Deliverables: done collapsed (summary in compact mode, 1-liners in full),
+	// open expanded with their checks.
+	if len(it.Deliverables) > 0 {
+		done, total := it.DeliverableCounts()
+		fmt.Fprintf(&b, "## Deliverables · %d/%d\n\n", done, total)
+		foldDone := compact && done > 0 && total > 3
+		if foldDone {
+			fmt.Fprintf(&b, "- [x] **%d deliverables done** _(press `B` for full list)_\n", done)
+		}
+		for i, d := range it.Deliverables {
+			r, t := it.CheckCountsFor(i + 1)
+			chk := ""
+			if t > 0 {
+				chk = fmt.Sprintf(" · %d/%d", r, t)
+				if r == t {
+					chk += " ✓"
+				}
+			}
+			if d.Done {
+				if !foldDone {
+					fmt.Fprintf(&b, "- [x] **%d.** %s%s\n", i+1, short(d.Text, 86), chk)
+				}
+				continue
+			}
+			fmt.Fprintf(&b, "- [ ] **%d.** %s%s\n", i+1, d.Text, chk)
+			for _, c := range it.ChecksFor(i + 1) {
+				text := c.Text
+				if c.Manual {
+					text = "✋ " + text
+				}
+				switch {
+				case c.Waived != "":
+					fmt.Fprintf(&b, "  - [x] ~~%s~~ · _waived_\n", short(text, 78))
+				case c.Done:
+					ev := ""
+					if c.Evidence != "" {
+						ev = " · `" + short(c.Evidence, 44) + "`"
+					}
+					fmt.Fprintf(&b, "  - [x] %s%s\n", short(text, 74), ev)
+				default:
+					fmt.Fprintf(&b, "  - [ ] %s\n", short(text, 84))
+				}
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// 3. Where: reconciled planned code map + off-plan touched files.
+	if hasCode {
+		reconciled, offPlan := model.ReconcileCode(it.Code, touched)
+		label := fmt.Sprintf("Where · %d files", len(reconciled))
+		if len(reconciled) == 0 {
+			label = fmt.Sprintf("Where · %d touched", len(offPlan))
+		} else if len(offPlan) > 0 {
+			label += fmt.Sprintf(" · △ %d off-plan", len(offPlan))
+		}
+		fmt.Fprintf(&b, "## %s\n\n```text\n%s\n```\n\n", label, CodeMapReconciled(it.Code, touched))
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+// BriefBody is the concise prose substitute shown in TUI brief mode (`B`):
+// just the Outcome paragraph (and Out of scope when present) so long-horizon
+// tickets fit cleanly in one screen.
+func BriefBody(it *model.Item) string {
+	var b strings.Builder
+	if out := model.Outcome(it, 320); out != "" && out != it.Title {
+		fmt.Fprintf(&b, "## Outcome\n\n%s\n", out)
+	}
+	if oos, ok := model.Section(it.Body, "Out of scope"); ok && strings.TrimSpace(oos) != "" {
+		fmt.Fprintf(&b, "\n## Out of scope\n\n%s\n", short(strings.Join(strings.Fields(oos), " "), 240))
+	}
+	b.WriteString("\n_Brief view · press `B` for full prose & worklog_\n")
+	return b.String()
 }
 
 func cmpStr(s, def string) string {

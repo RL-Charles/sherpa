@@ -20,6 +20,8 @@ const ClaudeEditTools = "Edit|Write|MultiEdit|NotebookEdit"
 func (claude) Parse(ev Event, payload []byte) Input {
 	var p struct {
 		Cwd            string `json:"cwd"`
+		SessionID      string `json:"session_id"`
+		ToolName       string `json:"tool_name"`
 		StopHookActive bool   `json:"stop_hook_active"`
 		ToolInput      struct {
 			FilePath     string `json:"file_path"`
@@ -28,11 +30,11 @@ func (claude) Parse(ev Event, payload []byte) Input {
 		} `json:"tool_input"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	in := Input{Dir: p.Cwd, StopActive: p.StopHookActive}
+	in := Input{Dir: p.Cwd, SessionID: p.SessionID, Tool: p.ToolName, StopActive: p.StopHookActive}
 	if ev == PostShell {
 		// The shell's output field differs between agents and versions; the
 		// PR URL is found anywhere in the payload.
-		return Input{Dir: p.Cwd, Command: p.ToolInput.Command, Output: string(payload)}
+		return Input{Dir: p.Cwd, SessionID: p.SessionID, Tool: p.ToolName, Command: p.ToolInput.Command, Output: string(payload)}
 	}
 	for _, f := range []string{p.ToolInput.FilePath, p.ToolInput.NotebookPath} {
 		if f != "" {

@@ -1,9 +1,11 @@
 package model
 
 import (
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Structured ticket data. These live in frontmatter, not the markdown body,
@@ -44,6 +46,101 @@ type CodeRef struct {
 	Lines       string   `yaml:"lines,omitempty" json:"lines,omitempty"`
 	Deliverable int      `yaml:"deliverable,omitempty" json:"deliverable,omitempty"`
 	Status      string   `yaml:"status,omitempty" json:"status,omitempty"`
+}
+
+// Handoff captures the concise state left when pausing work so a human or the
+// next agent session can resume immediately without scrolling the whole ticket.
+type Handoff struct {
+	Next      string    `yaml:"next,omitempty" json:"next,omitempty"`
+	Blocker   string    `yaml:"blocker,omitempty" json:"blocker,omitempty"`
+	SessionID string    `yaml:"session_id,omitempty" json:"session_id,omitempty"`
+	Agent     string    `yaml:"agent,omitempty" json:"agent,omitempty"`
+	Worktree  string    `yaml:"worktree,omitempty" json:"worktree,omitempty"`
+	Branch    string    `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Commit    string    `yaml:"commit,omitempty" json:"commit,omitempty"`
+	At        time.Time `yaml:"at,omitempty" json:"at,omitempty"`
+}
+
+func (h *Handoff) Empty() bool {
+	return h == nil || (h.Next == "" && h.Blocker == "" && h.SessionID == "" && h.Branch == "" && h.Worktree == "")
+}
+
+// ReconcileCode compares planned code-map entries against files actually touched
+// in the journal. Planned entries found in touched are promoted to "touched"
+// (unless already "done"); files not in the plan are returned as offPlan.
+func ReconcileCode(refs []CodeRef, touched []string) (reconciled []CodeRef, offPlan []string) {
+	touchedSet := make(map[string]bool, len(touched))
+	for _, f := range touched {
+		p := filepath.ToSlash(strings.TrimPrefix(strings.TrimSpace(f), "./"))
+		if p != "" {
+			touchedSet[p] = true
+		}
+	}
+	plannedSet := make(map[string]bool, len(refs))
+	reconciled = make([]CodeRef, len(refs))
+	for i, r := range refs {
+		p := filepath.ToSlash(strings.TrimPrefix(strings.TrimSpace(r.Path), "./"))
+		plannedSet[p] = true
+		if touchedSet[p] && (r.Status == "" || r.Status == "planned") {
+			r.Status = "touched"
+		}
+		reconciled[i] = r
+	}
+	seenOff := map[string]bool{}
+	for _, f := range touched {
+		p := filepath.ToSlash(strings.TrimPrefix(strings.TrimSpace(f), "./"))
+		if p == "" || plannedSet[p] || seenOff[p] {
+			continue
+		}
+		seenOff[p] = true
+		offPlan = append(offPlan, p)
+	}
+	return reconciled, offPlan
+}
+
+// Outcome extracts a concise one-paragraph summary of why an item exists:
+// first non-placeholder paragraph of Why, else Description, else Now, else Title.
+func Outcome(it *Item, maxRunes int) string {
+	for _, sec := range []string{"Why", "Description", "Goal"} {
+		if text, ok := Section(it.Body, sec); ok {
+			if p := firstBodyParagraph(text); p != "" {
+				return truncRunes(p, maxRunes)
+			}
+		}
+	}
+	if p := firstBodyParagraph(it.Body); p != "" {
+		return truncRunes(p, maxRunes)
+	}
+	if it.Now != "" {
+		return truncRunes(it.Now, maxRunes)
+	}
+	return truncRunes(it.Title, maxRunes)
+}
+
+func firstBodyParagraph(s string) string {
+	for _, p := range strings.Split(s, "\n\n") {
+		p = strings.TrimSpace(p)
+		if p == "" || strings.HasPrefix(p, "#") || strings.HasPrefix(p, "```") || strings.HasPrefix(p, "~~~") {
+			continue
+		}
+		p = strings.Join(strings.Fields(p), " ")
+		if p == "- …" || p == "- ..." || p == "…" || (strings.HasPrefix(p, "_") && strings.HasSuffix(p, "_") && len(p) > 2) {
+			continue
+		}
+		return p
+	}
+	return ""
+}
+
+func truncRunes(s string, n int) string {
+	if n <= 0 {
+		return strings.TrimSpace(s)
+	}
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= n {
+		return string(r)
+	}
+	return strings.TrimRight(string(r[:n]), " ") + "…"
 }
 
 // Measure is a measurable outcome: what was targeted and what was reached.

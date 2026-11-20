@@ -333,11 +333,61 @@ func StripWorklog(body string) (string, bool) {
 // of its path. The active ticket is tracked per checkout, so an agent's own
 // shp commands and its tool hooks always agree, whatever their actor name.
 func (s *Store) CheckoutKey() string {
-	if s.CodeRoot == "" || s.CodeRoot == s.Root {
+	return s.CheckoutKeyFor(s.CodeRoot)
+}
+
+// CheckoutKeyFor computes the checkout key for an arbitrary worktree path.
+func (s *Store) CheckoutKeyFor(codeRoot string) string {
+	if codeRoot == "" || filepath.Clean(codeRoot) == filepath.Clean(s.Root) {
 		return "main"
 	}
-	sum := sha1.Sum([]byte(s.CodeRoot))
-	return keySafe.ReplaceAllString(filepath.Base(s.CodeRoot), "-") + "-" + hex.EncodeToString(sum[:3])
+	sum := sha1.Sum([]byte(filepath.Clean(codeRoot)))
+	return keySafe.ReplaceAllString(filepath.Base(codeRoot), "-") + "-" + hex.EncodeToString(sum[:3])
+}
+
+// PruneActive removes stale .sherpa/.local/active/* files whose ticket is no
+// longer in_progress or whose linked git worktree no longer exists.
+func (s *Store) PruneActive(items []*model.Item) int {
+	dir := filepath.Join(s.Dir, ".local", "active")
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		return 0
+	}
+	inProg := make(map[string]bool, len(items))
+	for _, it := range items {
+		if it.Kind == model.Ticket && it.Status == model.InProgress {
+			inProg[it.ID] = true
+		}
+	}
+	var liveKeys map[string]bool
+	if wts := gitinfo.WorktreePaths(s.Root); len(wts) > 0 {
+		liveKeys = make(map[string]bool, len(wts)+1)
+		liveKeys["main"] = true
+		for _, wt := range wts {
+			liveKeys[s.CheckoutKeyFor(wt)] = true
+		}
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		p := filepath.Join(dir, name)
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		id := strings.TrimSpace(string(data))
+		deadWorktree := liveKeys != nil && !liveKeys[name]
+		deadTicket := id == "" || !inProg[id]
+		if deadWorktree || deadTicket {
+			if os.Remove(p) == nil {
+				removed++
+			}
+		}
+	}
+	return removed
 }
 
 var keySafe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)

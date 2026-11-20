@@ -166,6 +166,7 @@ type Item struct {
 	Labels       []string      `yaml:"labels,omitempty" json:"labels,omitempty"`
 	Depends      []string      `yaml:"depends,omitempty" json:"depends,omitempty"`
 	Now          string        `yaml:"now,omitempty" json:"now,omitempty"` // one-line current state
+	Handoff      *Handoff      `yaml:"handoff,omitempty" json:"handoff,omitempty"`
 	Created      time.Time     `yaml:"created" json:"created"`
 	Updated      time.Time     `yaml:"updated" json:"updated"`
 	Checks       []Check       `yaml:"checks,omitempty" json:"checks,omitempty"`

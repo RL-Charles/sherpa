@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -68,7 +69,7 @@ func (m *Model) spinner(id string) string {
 	return ""
 }
 
-// workingView is the header's "⠹ claude on T-0009" segment.
+// workingView is the header's "⠹ claude on T-0009 (edit token.go)" segment.
 func (m *Model) workingView() string {
 	if len(m.pulses) == 0 {
 		return ""
@@ -78,6 +79,18 @@ func (m *Model) workingView() string {
 		s := p.Agent
 		if p.Ticket != "" {
 			s += " on " + p.Ticket
+		}
+		if p.Action != "" || p.File != "" {
+			detail := p.Action
+			if p.File != "" {
+				base := filepath.Base(p.File)
+				if detail != "" {
+					detail += " " + base
+				} else {
+					detail = base
+				}
+			}
+			s += " (" + detail + ")"
 		}
 		parts = append(parts, s)
 	}

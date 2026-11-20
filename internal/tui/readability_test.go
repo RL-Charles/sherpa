@@ -73,3 +73,38 @@ func TestPinnedHeaderSurvivesScroll(t *testing.T) {
 		t.Fatalf("pinned title disappeared after scrolling:\n%s", view)
 	}
 }
+
+func TestBriefAndHideDoneToggles(t *testing.T) {
+	m := fixture(t)
+	it, _ := m.store.Get("T-0002")
+	it.Status = model.Done
+	_ = m.store.Save(it)
+	m.reloadKeep()
+
+	// H hides done tickets in the tree.
+	press(m, "H")
+	if !m.hideDone {
+		t.Fatal("H should enable hideDone")
+	}
+	if strings.Contains(rowKeys(m), "T-0002") {
+		t.Fatalf("done ticket T-0002 should be hidden when hideDone=true: %s", rowKeys(m))
+	}
+	press(m, "H")
+	if m.hideDone || !strings.Contains(rowKeys(m), "T-0002") {
+		t.Fatalf("second H should restore T-0002: %s", rowKeys(m))
+	}
+
+	// B toggles brief preview mode.
+	press(m, "j", "j", "B")
+	if !m.briefMode {
+		t.Fatal("B should enable briefMode")
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "[brief · B full]") || !strings.Contains(view, "Outcome") {
+		t.Fatalf("brief view missing brief indicator or Outcome:\n%s", view)
+	}
+	press(m, "B")
+	if m.briefMode {
+		t.Fatal("second B should return to full mode")
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,7 +30,9 @@ import (
 	"github.com/RL-Charles/sherpa/internal/live"
 	"github.com/RL-Charles/sherpa/internal/model"
 	"github.com/RL-Charles/sherpa/internal/policy"
+	"github.com/RL-Charles/sherpa/internal/render"
 	"github.com/RL-Charles/sherpa/internal/store"
+	"github.com/RL-Charles/sherpa/internal/worklog"
 )
 
 type Event string
@@ -49,6 +52,8 @@ type Input struct {
 	Agent      string // claude, cursor, codex, opencode
 	Event      Event
 	Dir        string   // working directory of the agent
+	SessionID  string   // native agent session / conversation ID
+	Tool       string   // tool name for live activity (edit, shell, read, ...)
 	Files      []string // files being edited (absolute or relative to Dir)
 	StopActive bool     // the agent is already continuing because of a stop hook
 	Command    string   // post-shell: the command the agent ran
@@ -87,7 +92,26 @@ func Handle(in Input) Output {
 		if it := activeTicket(s); it != nil {
 			id = it.ID
 		}
-		_ = live.Touch(s, cmpOr(in.Agent, "agent"), id)
+		file := ""
+		for _, f := range in.Files {
+			if rel, ok := relative(s, cmpDir(in.Dir), f); ok && !strings.HasPrefix(rel, store.DirName) {
+				file = rel
+				break
+			}
+		}
+		action := in.Tool
+		if action == "" && (in.Event == PreEdit || in.Event == PostEdit) {
+			action = "edit"
+		}
+		_ = live.TouchInfo(s, live.Pulse{
+			Agent:     cmpOr(in.Agent, "agent"),
+			SessionID: in.SessionID,
+			Ticket:    id,
+			Action:    action,
+			File:      file,
+			Worktree:  s.CheckoutKey(),
+			Branch:    gitinfo.Branch(s.CodeRoot),
+		})
 	}
 	return out
 }
@@ -117,67 +141,93 @@ func sessionContext(s *store.Store) string {
 	if err != nil {
 		return ""
 	}
+	_ = s.PruneActive(items)
+	byID := make(map[string]*model.Item, len(items))
+	for _, it := range items {
+		byID[it.ID] = it
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Sherpa tracks work in this repo (%s, key %s).\n", s.Config.Name, s.Config.Key)
-	if it := activeTicket(s); it != nil {
-		fmt.Fprintf(&b, "Active ticket in this checkout: %s %s. Keep working on it, logging as you go.\n", it.ID, it.Title)
-		if d, t := it.DeliverableCounts(); t > 0 {
-			fmt.Fprintf(&b, "  deliverables %d/%d:\n", d, t)
-			for i, x := range it.Deliverables {
-				mark := "○"
-				if x.Done {
-					mark = "✓"
-				}
-				fmt.Fprintf(&b, "    %s %d. %s\n", mark, i+1, x.Text)
-			}
-		}
-		for i, c := range it.Checks {
-			if !c.Resolved() {
-				link := ""
-				if c.For > 0 {
-					link = fmt.Sprintf(" (deliverable %d)", c.For)
-				}
-				fmt.Fprintf(&b, "  open check %d: %s%s\n", i+1, c.Text, link)
-			}
-		}
-		if len(it.Code) > 0 {
-			fmt.Fprintf(&b, "  where:\n")
-			for i, c := range it.Code {
-				if i == 6 {
-					fmt.Fprintf(&b, "    … %d more\n", len(it.Code)-6)
-					break
-				}
-				line := "    " + c.Path
-				if len(c.Symbols) > 0 {
-					line += " (" + strings.Join(c.Symbols, ", ") + ")"
-				}
-				fmt.Fprintln(&b, line)
-			}
-		}
-		fmt.Fprintf(&b, "  brief: `shp brief %s` (outcome, deliverables, next check, code map)\n", it.ID)
+	active := activeTicket(s)
+	if active != nil {
+		writeActiveResume(&b, s, active, byID)
 	} else {
 		b.WriteString("No ticket is claimed in this checkout. Claim one with `shp start <T-id>` before editing files (edits are blocked until you do).\n")
 	}
-	list := func(title string, st model.Status, limit int) {
-		var lines []string
+	queueLimit := 8
+	if active != nil {
+		queueLimit = 5
+	}
+	list := func(title string, st model.Status, limit int, hideStale bool) {
+		var matched []*model.Item
 		for _, it := range items {
 			if it.Kind == model.Ticket && it.Status == st {
-				lines = append(lines, fmt.Sprintf("  %s %s", it.ID, it.Title))
+				if active != nil && it.ID == active.ID {
+					continue
+				}
+				matched = append(matched, it)
 			}
 		}
-		if len(lines) == 0 {
+		if len(matched) == 0 {
 			return
 		}
+		sort.SliceStable(matched, func(i, j int) bool {
+			if !matched[i].Updated.Equal(matched[j].Updated) {
+				return matched[i].Updated.After(matched[j].Updated)
+			}
+			return matched[i].ID > matched[j].ID
+		})
+		staleCutoff := time.Now().Add(-14 * 24 * time.Hour)
+		var fresh []*model.Item
+		stale := 0
+		for _, it := range matched {
+			if hideStale && !it.Updated.IsZero() && it.Updated.Before(staleCutoff) {
+				stale++
+				continue
+			}
+			fresh = append(fresh, it)
+		}
+		shown := fresh
+		if len(shown) == 0 && len(matched) > 0 {
+			shown = matched
+			stale = 0
+		}
+		moreFresh := 0
+		if len(shown) > limit {
+			moreFresh = len(shown) - limit
+			shown = shown[:limit]
+		}
+		var lines []string
+		for _, it := range shown {
+			meta := []string{}
+			if age := render.Age(it.Updated); age != "" && age != "just now" {
+				meta = append(meta, age)
+			}
+			if it.Assignee != "" {
+				meta = append(meta, "@"+it.Assignee)
+			}
+			suffix := ""
+			if len(meta) > 0 {
+				suffix = " (" + strings.Join(meta, ", ") + ")"
+			}
+			lines = append(lines, fmt.Sprintf("  %s %s%s", it.ID, clipText(it.Title, 78), suffix))
+		}
+		var tail []string
+		if moreFresh > 0 {
+			tail = append(tail, fmt.Sprintf("%d more", moreFresh))
+		}
+		if stale > 0 {
+			tail = append(tail, fmt.Sprintf("%d stale >14d", stale))
+		}
 		more := ""
-		if len(lines) > limit {
-			more = fmt.Sprintf("  … and %d more (`shp ls -s %s`)\n", len(lines)-limit, st)
-			lines = lines[:limit]
+		if len(tail) > 0 {
+			more = fmt.Sprintf("  … and %s (`shp ls -s %s`)\n", strings.Join(tail, ", "), st)
 		}
 		fmt.Fprintf(&b, "%s:\n%s\n%s", title, strings.Join(lines, "\n"), more)
 	}
-	list("In progress", model.InProgress, 8)
-	list("Ready to start", model.Ready, 8)
-	list("Awaiting agent review (if asked to review: shp review <id> --pass|--reject -m \"notes\")", model.AgentReview, 8)
+	list("In progress (recent)", model.InProgress, queueLimit, true)
+	list("Ready to start", model.Ready, queueLimit, false)
+	list("Awaiting agent review (if asked to review: shp review <id> --pass|--reject -m \"notes\")", model.AgentReview, queueLimit, true)
 	switch p, err := policy.Load(s.Dir); {
 	case err != nil:
 		fmt.Fprintf(&b, "⚠ Review policy is broken: %v\n", err)
@@ -189,11 +239,205 @@ func sessionContext(s *store.Store) string {
 	}
 	b.WriteString(`Protocol: shp brief <T-id> → shp start <T-id> → shp log "headline" -f <file> (-k decision|verify|blocker, -d details) → ` +
 		`shp deliverable add "outcome", shp where add <file> --symbols <Type,Func> --deliverable N, shp check add --for N "…" → ` +
-		`shp now "one-line state", shp check <n> -e <evidence>, shp measure "<name>" <value> --target <goal> → ` +
+		`shp handoff --now "state" --next "next step" (when pausing), shp check <n> -e <evidence> → ` +
 		`shp lint <T-id> → open the PR with gh pr create (Sherpa links it) → shp submit -m "what changed" --verified "how it was checked". ` +
 		`Close a ticket with shp done <T-id> when every deliverable and check is resolved; only a human closes a story or epic. ` +
 		`Never edit .sherpa/ by hand.`)
 	return b.String()
+}
+
+func writeActiveResume(b *strings.Builder, s *store.Store, it *model.Item, byID map[string]*model.Item) {
+	fmt.Fprintf(b, "Active ticket in this checkout: %s %s. Keep working on it, logging as you go.\n", it.ID, it.Title)
+	var meta []string
+	if path := breadcrumb(it, byID); path != "" {
+		meta = append(meta, path)
+	}
+	if age := render.Age(it.Updated); age != "" && age != "just now" {
+		meta = append(meta, "updated "+age+" ago")
+	}
+	if it.Assignee != "" {
+		meta = append(meta, "@"+it.Assignee)
+	}
+	if l := it.Links; l != nil {
+		if l.PRNumber > 0 {
+			pr := fmt.Sprintf("PR #%d", l.PRNumber)
+			if l.PRState != "" {
+				pr += " " + l.PRState
+			}
+			meta = append(meta, pr)
+		}
+		if l.Branch != "" {
+			meta = append(meta, "branch "+l.Branch)
+		}
+	}
+	if len(it.Depends) > 0 {
+		var deps []string
+		for _, d := range it.Depends {
+			g := "?"
+			if dep := byID[d]; dep != nil {
+				g = dep.Status.Glyph()
+			}
+			deps = append(deps, d+g)
+		}
+		meta = append(meta, "needs "+strings.Join(deps, ", "))
+	}
+	if len(meta) > 0 {
+		fmt.Fprintf(b, "  context: %s\n", strings.Join(meta, " · "))
+	}
+	if it.Now != "" {
+		fmt.Fprintf(b, "  now: %s\n", clipText(it.Now, 220))
+	}
+	if out := model.Outcome(it, 200); out != "" && out != it.Now && out != it.Title {
+		fmt.Fprintf(b, "  outcome: %s\n", out)
+	}
+	var itemEvents []journal.Event
+	if allEv, err := journal.ReadAll(s.Dir); err == nil {
+		itemEvents = journal.ForItem(allEv, it.ID)
+	}
+	if h := it.Handoff; !h.Empty() {
+		if h.Next != "" {
+			fmt.Fprintf(b, "  next: %s\n", clipText(h.Next, 200))
+		}
+		if h.Blocker != "" {
+			fmt.Fprintf(b, "  blocker: ⛔ %s\n", clipText(h.Blocker, 200))
+		}
+		var sess []string
+		if h.Agent != "" {
+			sess = append(sess, "@"+h.Agent)
+		}
+		if h.SessionID != "" {
+			sess = append(sess, "session "+h.SessionID)
+		}
+		if h.Branch != "" {
+			sess = append(sess, "branch "+h.Branch)
+		}
+		if h.Worktree != "" && h.Worktree != "main" {
+			sess = append(sess, "wt "+h.Worktree)
+		}
+		if len(sess) > 0 {
+			fmt.Fprintf(b, "  last handoff: %s\n", strings.Join(sess, " · "))
+		}
+	} else if actor, sid, br, wt := worklog.LastAgentContext(itemEvents); sid != "" || br != "" {
+		var sess []string
+		if actor != "" {
+			sess = append(sess, "@"+actor)
+		}
+		if sid != "" {
+			sess = append(sess, "session "+sid)
+		}
+		if br != "" {
+			sess = append(sess, "branch "+br)
+		}
+		if wt != "" && wt != "main" {
+			sess = append(sess, "wt "+wt)
+		}
+		if len(sess) > 0 {
+			fmt.Fprintf(b, "  last session: %s\n", strings.Join(sess, " · "))
+		}
+	}
+	if d, t := it.DeliverableCounts(); t > 0 {
+		fmt.Fprintf(b, "  deliverables %d/%d:\n", d, t)
+		compactDone := d > 0 && t > 3
+		if compactDone {
+			fmt.Fprintf(b, "    ✓ %d done\n", d)
+		}
+		for i, x := range it.Deliverables {
+			if compactDone && x.Done {
+				continue
+			}
+			mark := "○"
+			if x.Done {
+				mark = "✓"
+			}
+			fmt.Fprintf(b, "    %s %d. %s\n", mark, i+1, clipText(x.Text, 120))
+		}
+	}
+	openChecks := 0
+	for i, c := range it.Checks {
+		if c.Resolved() {
+			continue
+		}
+		openChecks++
+		if openChecks > 6 {
+			fmt.Fprintf(b, "  … more open checks (`shp checks %s`)\n", it.ID)
+			break
+		}
+		link := ""
+		if c.For > 0 {
+			link = fmt.Sprintf(" (deliverable %d)", c.For)
+		}
+		manual := ""
+		if c.Manual {
+			manual = " [manual]"
+		}
+		fmt.Fprintf(b, "  open check %d: %s%s%s\n", i+1, clipText(c.Text, 120), manual, link)
+	}
+	where, offPlan := model.ReconcileCode(it.Code, worklog.TouchedFiles(itemEvents))
+	if len(where) > 0 || len(offPlan) > 0 {
+		fmt.Fprintf(b, "  where:\n")
+		for i, c := range where {
+			if i == 6 {
+				fmt.Fprintf(b, "    … %d more\n", len(where)-6)
+				break
+			}
+			line := "    " + c.Path
+			if len(c.Symbols) > 0 {
+				line += " (" + strings.Join(c.Symbols, ", ") + ")"
+			}
+			st := c.Status
+			if st == "" {
+				st = "planned"
+			}
+			line += " [" + st + "]"
+			fmt.Fprintln(b, line)
+		}
+		if len(offPlan) > 0 {
+			shown := offPlan
+			extra := ""
+			if len(shown) > 4 {
+				extra = fmt.Sprintf(" (+%d more)", len(shown)-4)
+				shown = shown[:4]
+			}
+			fmt.Fprintf(b, "    △ off-plan touched: %s%s\n", strings.Join(shown, ", "), extra)
+		}
+	}
+	if sigs := worklog.RecentSignals(itemEvents, 3); len(sigs) > 0 {
+		fmt.Fprintf(b, "  recent signals (%d events total):\n", len(itemEvents))
+		for _, e := range sigs {
+			icon, _, head, _ := worklog.Describe(e)
+			age := render.Age(e.TS)
+			if age != "" {
+				age = " (" + age + ")"
+			}
+			fmt.Fprintf(b, "    %s %s%s\n", icon, clipText(head, 120), age)
+		}
+	}
+	fmt.Fprintf(b, "  commands: `shp brief %s` (full brief) · `shp handoff --now \"…\" --next \"…\"` (pause cleanly)\n", it.ID)
+}
+
+func breadcrumb(it *model.Item, byID map[string]*model.Item) string {
+	var parts []string
+	seen := map[string]bool{it.ID: true}
+	for pid := it.Parent; pid != "" && !seen[pid]; {
+		seen[pid] = true
+		p := byID[pid]
+		if p == nil {
+			parts = append([]string{pid}, parts...)
+			break
+		}
+		parts = append([]string{p.ID + " " + clipText(p.Title, 32)}, parts...)
+		pid = p.Parent
+	}
+	return strings.Join(parts, " › ")
+}
+
+func clipText(s string, maxRunes int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return strings.TrimRight(string(r[:maxRunes]), " ") + "…"
 }
 
 // relative reports f relative to the checkout, and whether it lies inside it.
@@ -253,10 +497,21 @@ func postEdit(s *store.Store, in Input) {
 	}
 	actor := "agent:" + cmpOr(in.Agent, "unknown")
 	session := journal.Session(actor)
-	if s.CodeRoot != s.Root && os.Getenv("SHERPA_SESSION") == "" {
+	if in.SessionID != "" && os.Getenv("SHERPA_SESSION") == "" {
+		session = cmpOr(in.Agent, "agent") + "-" + in.SessionID
+	} else if s.CodeRoot != s.Root && os.Getenv("SHERPA_SESSION") == "" {
 		session += "-" + filepath.Base(s.CodeRoot)
 	}
-	_ = journal.Append(s.Dir, journal.Event{Actor: actor, Session: session, Item: it.ID, Type: "touch", Files: files})
+	_ = journal.Append(s.Dir, journal.Event{
+		Actor:        actor,
+		Session:      session,
+		AgentSession: in.SessionID,
+		Branch:       gitinfo.Branch(s.CodeRoot),
+		Worktree:     s.CheckoutKey(),
+		Item:         it.ID,
+		Type:         "touch",
+		Files:        files,
+	})
 }
 
 func stop(s *store.Store, in Input) Output {
@@ -276,7 +531,7 @@ func stop(s *store.Store, in Input) Output {
 		switch e.Type {
 		case "touch":
 			lastTouch = e.TS
-		case "log", "submit", "claim", "status":
+		case "log", "handoff", "submit", "claim", "status":
 			lastNote = e.TS
 		}
 	}
@@ -295,8 +550,8 @@ func stop(s *store.Store, in Input) Output {
 	}
 	return Output{Block: true, Reason: fmt.Sprintf(
 		"Sherpa: you changed files on %s since its last worklog entry. Before stopping, record where things stand: "+
-			"if the work is finished, `shp submit -m \"what changed\" --verified \"how it was checked\"`; "+
-			"otherwise `shp log \"what you did and what's next\"` (add `-k blocker` if you're stuck).", it.ID)}
+			"if finished, `shp submit -m \"what changed\" --verified \"how it was checked\"`; "+
+			"if pausing, `shp handoff --now \"one-line state\" --next \"concrete next step\"` (add `--blocker \"…\"` if stuck).", it.ID)}
 }
 
 func cmpOr(a, b string) string {

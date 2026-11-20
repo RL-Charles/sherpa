@@ -68,10 +68,15 @@ func flattenGroups(items []*model.Item, expanded map[string]bool, order []model.
 		if inbox {
 			group = inboxItems(items, st)
 		}
-		if st == model.Review { // hand checks first: they are what only a human can do
+		if st == model.Review { // hand checks first, then most recently updated
 			slices.SortStableFunc(group, func(a, b *model.Item) int {
-				return len(b.OpenManual()) - len(a.OpenManual())
+				if diff := len(b.OpenManual()) - len(a.OpenManual()); diff != 0 {
+					return diff
+				}
+				return compareRecency(a, b)
 			})
+		} else {
+			slices.SortStableFunc(group, compareRecency)
 		}
 		rows = append(rows, row{group: st, count: len(group), hasKids: len(group) > 0})
 		if expanded[groupKey(st)] {
@@ -133,6 +138,16 @@ func (m *Model) groupDoc(st model.Status) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func compareRecency(a, b *model.Item) int {
+	if a.Updated.After(b.Updated) {
+		return -1
+	}
+	if b.Updated.After(a.Updated) {
+		return 1
+	}
+	return strings.Compare(a.ID, b.ID)
 }
 
 func (m *Model) toggleBoard() {

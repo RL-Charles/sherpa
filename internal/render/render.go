@@ -13,6 +13,7 @@ import (
 	gansi "github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 
 	"github.com/RL-Charles/sherpa/internal/model"
@@ -81,6 +82,52 @@ func StatusStyle(s model.Status) lipgloss.Style {
 		c = lipgloss.AdaptiveColor{Light: "245", Dark: "240"}
 	}
 	return lipgloss.NewStyle().Foreground(c)
+}
+
+var (
+	staleWarnStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"})
+	staleCritStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"}).Bold(true)
+	nowLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "45"}).Bold(true)
+	nextLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "78"}).Bold(true)
+	blkLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"}).Bold(true)
+	chipStyle      = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "243"})
+)
+
+// StaleAgeStyle highlights aging in-progress and review work so stale tickets
+// stand out in long-horizon repositories.
+func StaleAgeStyle(s model.Status, updated time.Time) lipgloss.Style {
+	if updated.IsZero() {
+		return dim
+	}
+	age := time.Since(updated)
+	switch s {
+	case model.InProgress:
+		if age >= 7*24*time.Hour {
+			return staleCritStyle
+		}
+		if age >= 3*24*time.Hour {
+			return staleWarnStyle
+		}
+	case model.Review, model.AgentReview:
+		if age >= 7*24*time.Hour {
+			return staleCritStyle
+		}
+		if age >= 3*24*time.Hour {
+			return staleWarnStyle
+		}
+	case model.Blocked:
+		return staleCritStyle
+	}
+	return dim
+}
+
+// IsStale reports whether an active ticket has been untouched past its aging threshold.
+func IsStale(s model.Status, updated time.Time) bool {
+	if updated.IsZero() {
+		return false
+	}
+	age := time.Since(updated)
+	return (s == model.InProgress || s == model.Review || s == model.AgentReview) && age >= 7*24*time.Hour
 }
 
 // statusWord is the human label used in CLI output and the labelled tree.
@@ -264,6 +311,136 @@ func PreviewHeader(it *model.Item, parent *model.Item) string {
 		b.WriteString("**Now:** " + it.Now + "\n")
 	}
 	return b.String()
+}
+
+// CompactPreviewHeader renders a tight 3–4 line lipgloss pinned strip above the
+// TUI scroll region: ID + primary title, full Epic › Story + status/aging/PR/deps
+// metadata, a capped Now line, and Handoff Next/Blocker when present.
+func CompactPreviewHeader(it *model.Item, all []*model.Item, width int, briefMode bool) []string {
+	if width < 20 {
+		width = 20
+	}
+	byID := make(map[string]*model.Item, len(all))
+	for _, x := range all {
+		byID[x.ID] = x
+	}
+	modeTag := "[full · B brief]"
+	if briefMode {
+		modeTag = "[brief · B full]"
+	}
+	tag := chipStyle.Render(modeTag)
+	tagW := ansi.StringWidth(tag)
+	titleAvail := max(12, width-tagW-2)
+	titleLeft := idCol.Render(it.ID) + dim.Render(" · ") + bold.Render(it.Title)
+	if ansi.StringWidth(titleLeft) > titleAvail {
+		titleLeft = ansi.Truncate(titleLeft, titleAvail, "…")
+	}
+	gap := max(1, width-ansi.StringWidth(titleLeft)-tagW)
+	line1 := titleLeft + strings.Repeat(" ", gap) + tag
+
+	// Line 2: semantic status + staleness + hierarchy breadcrumb + counts + PR + deps.
+	stLabel := it.Status.Glyph() + " " + statusWord(it.Status)
+	meta := []string{StatusStyle(it.Status).Bold(true).Render(stLabel)}
+	if age := Age(it.Updated); age != "" {
+		ageStr := age
+		if IsStale(it.Status, it.Updated) {
+			ageStr += " stale"
+		}
+		meta = append(meta, StaleAgeStyle(it.Status, it.Updated).Render(ageStr))
+	}
+	if it.Assignee != "" {
+		meta = append(meta, dim.Render("@"+it.Assignee))
+	}
+	if crumb := breadcrumbIDs(it, byID); crumb != "" {
+		meta = append(meta, dim.Render(crumb))
+	}
+	if d, t := it.DeliverableCounts(); t > 0 {
+		meta = append(meta, dim.Render(fmt.Sprintf("%d/%d deliv", d, t)))
+	}
+	if r, t := it.CheckCounts(); t > 0 {
+		mark := ""
+		if r == t {
+			mark = " ✓"
+		}
+		meta = append(meta, dim.Render(fmt.Sprintf("%d/%d checks%s", r, t, mark)))
+	}
+	if l := it.Links; l != nil && l.PRNumber > 0 {
+		pr := fmt.Sprintf("⇡ #%d", l.PRNumber)
+		if l.PRState != "" {
+			pr += " " + l.PRState
+		}
+		meta = append(meta, dim.Render(pr))
+	}
+	if len(it.Depends) > 0 {
+		var deps []string
+		for i, d := range it.Depends {
+			if i == 3 {
+				deps = append(deps, fmt.Sprintf("+%d", len(it.Depends)-3))
+				break
+			}
+			g := "?"
+			if x := byID[d]; x != nil {
+				g = x.Status.Glyph()
+			}
+			deps = append(deps, d+g)
+		}
+		meta = append(meta, dim.Render("needs "+strings.Join(deps, ", ")))
+	}
+	line2 := ansi.Truncate(strings.Join(meta, dim.Render(" · ")), width, "…")
+
+	out := []string{line1, line2}
+	if it.Now != "" {
+		nowLines := wrapCapped(nowLabelStyle.Render("Now")+"  ", strings.Join(strings.Fields(it.Now), " "), width, 2)
+		out = append(out, nowLines...)
+	}
+	if h := it.Handoff; !h.Empty() {
+		if h.Blocker != "" {
+			out = append(out, ansi.Truncate(blkLabelStyle.Render("Blk")+"  ⛔ "+strings.Join(strings.Fields(h.Blocker), " "), width, "…"))
+		}
+		if h.Next != "" {
+			out = append(out, ansi.Truncate(nextLabelStyle.Render("Next")+" "+strings.Join(strings.Fields(h.Next), " "), width, "…"))
+		}
+	}
+	return out
+}
+
+func breadcrumbIDs(it *model.Item, byID map[string]*model.Item) string {
+	var parts []string
+	seen := map[string]bool{it.ID: true}
+	for pid := it.Parent; pid != "" && !seen[pid]; {
+		seen[pid] = true
+		parts = append([]string{pid}, parts...)
+		if p := byID[pid]; p != nil {
+			pid = p.Parent
+		} else {
+			break
+		}
+	}
+	return strings.Join(parts, " › ")
+}
+
+func wrapCapped(prefix, text string, width, maxLines int) []string {
+	pw := ansi.StringWidth(prefix)
+	avail := max(16, width-pw)
+	wrapped := strings.Split(ansi.Wordwrap(text, avail, ""), "\n")
+	if len(wrapped) > maxLines {
+		wrapped = wrapped[:maxLines]
+		last := strings.TrimRight(wrapped[maxLines-1], " .,:;")
+		if ansi.StringWidth(last) >= avail {
+			last = ansi.Truncate(last, max(4, avail-1), "")
+		}
+		wrapped[maxLines-1] = strings.TrimRight(last, " ") + "…"
+	}
+	indent := strings.Repeat(" ", pw)
+	out := make([]string, len(wrapped))
+	for i, l := range wrapped {
+		if i == 0 {
+			out[i] = prefix + l
+		} else {
+			out[i] = indent + l
+		}
+	}
+	return out
 }
 
 // DocFooter lists an item's children; empty when there are none.

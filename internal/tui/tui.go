@@ -43,6 +43,8 @@ type Model struct {
 	items     []*model.Item
 	events    []journal.Event
 	expandLog bool // show every worklog session, not just the latest
+	hideDone  bool // hide completed tickets in the tree (`H`)
+	briefMode bool // concise 1-screen ticket brief in preview (`B`)
 	rows      []row
 	expanded  map[string]bool // tree items by ID, board sections by groupKey
 	board     bool            // left pane shows the status board instead of the tree
@@ -94,8 +96,19 @@ func New(s *store.Store, style string) *Model {
 		help:     help.New(),
 	}
 	m.reload()
+	tickets := 0
+	for _, it := range m.items {
+		if it.Kind == model.Ticket {
+			tickets++
+		}
+	}
+	// Large, long-horizon repos hide completed tickets by default (`H` toggles).
+	m.hideDone = tickets > 20
 	for _, it := range m.items {
 		if it.Kind != model.Ticket {
+			if m.hideDone && it.Status == model.Done {
+				continue
+			}
 			m.expanded[it.ID] = true
 		}
 	}
@@ -155,7 +168,7 @@ func (m *Model) rebuild(keepID string) {
 			m.rows = flattenBoard(m.items, m.expanded, order)
 		}
 	} else {
-		m.rows = flatten(m.items, m.expanded)
+		m.rows = flattenFiltered(m.items, m.expanded, m.hideDone)
 	}
 	if keepID != "" {
 		for i, r := range m.rows {
@@ -282,6 +295,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = "· tree: " + m.density.String()
 			m.rebuild(m.currentID())
 			return m, nil
+		case key.Matches(msg, m.keys.Brief):
+			m.briefMode = !m.briefMode
+			if m.briefMode {
+				m.flash = "· preview: brief (B for full)"
+			} else {
+				m.flash = "· preview: full (B for brief)"
+			}
+			m.ed.offset = 0
+			m.refreshPreview()
+			return m, nil
+		case key.Matches(msg, m.keys.HideDone):
+			m.hideDone = !m.hideDone
+			if m.hideDone {
+				m.flash = "· hiding done tickets (H to show)"
+			} else {
+				m.flash = "· showing done tickets (H to hide)"
+			}
+			m.rebuild(m.currentID())
+			return m, nil
+		case key.Matches(msg, m.keys.PrevSec):
+			m.ed.jumpSection(-1)
+			return m, nil
+		case key.Matches(msg, m.keys.NextSec):
+			m.ed.jumpSection(1)
+			return m, nil
 		case key.Matches(msg, m.keys.Find):
 			m.openFinder()
 			return m, nil
@@ -336,7 +374,8 @@ func (m *Model) startEdit() {
 	m.focus = focusPreview
 	m.editID, m.editBase = it.ID, it.Body
 	m.conflict, m.quitArmed = false, false
-	m.ed.lead = "" // editing gets the pane; the review card returns after save/discard
+	m.ed.lines = strings.Split(strings.TrimRight(it.Body, "\n"), "\n")
+	m.ed.lead = "" // editing gets the pane; the review card and snapshot return after save/discard
 	m.layout()
 	m.ed.startEditing()
 }
@@ -630,21 +669,33 @@ func (m *Model) refreshPreview() {
 		m.previewID = ""
 		return
 	}
-	var parent *model.Item
-	if it.Parent != "" {
-		parent = m.findItem(it.Parent)
+	itemEvents := journal.ForItem(m.events, it.ID)
+	pinLines := render.CompactPreviewHeader(it, m.items, m.ed.width, m.briefMode)
+	var leads []string
+	if e, ok := worklog.LastReview(itemEvents); ok {
+		if rc := render.ReviewCard(it, e); rc != "" {
+			leads = append(leads, rc)
+		}
 	}
-	pinned := render.PreviewHeader(it, parent)
-	lead := ""
-	if e, ok := worklog.LastReview(journal.ForItem(m.events, it.ID)); ok {
-		lead = render.ReviewCard(it, e)
+	snapshot := render.Snapshot(it, itemEvents, m.briefMode)
+	if snapshot != "" {
+		leads = append(leads, snapshot)
 	}
-	m.ed.setParts(pinned, lead, it.Body,
-		render.Sections(it, m.items, store.Children(m.items, it.ID)), it.ID != m.previewID)
-	m.ed.tail = worklog.RenderOptions(worklog.Build(journal.ForItem(m.events, it.ID)), m.ed.width, worklog.Options{
-		ExpandAll:        m.expandLog,
-		HideSubmitDetail: it.Status == model.Review || it.Status == model.AgentReview,
-	})
+	lead := strings.Join(leads, "\n")
+
+	if m.briefMode {
+		m.ed.setParts("", lead, render.BriefBody(it), "", it.ID != m.previewID)
+		m.ed.pinnedRaw = pinLines
+		m.ed.tail = nil
+	} else {
+		m.ed.setParts("", lead, it.Body,
+			render.TailSections(it, m.items, store.Children(m.items, it.ID), snapshot != ""), it.ID != m.previewID)
+		m.ed.pinnedRaw = pinLines
+		m.ed.tail = worklog.RenderOptions(worklog.Build(itemEvents), m.ed.width, worklog.Options{
+			ExpandAll:        m.expandLog,
+			HideSubmitDetail: it.Status == model.Review || it.Status == model.AgentReview,
+		})
+	}
 	m.previewID = it.ID
 }
 
@@ -731,6 +782,9 @@ func (m *Model) headerView() string {
 		out := strings.Join(parts, "  ")
 		if tickets > 0 {
 			out += faint.Render(fmt.Sprintf("  · %d%% done", counts[model.Done]*100/tickets))
+		}
+		if !m.board && m.hideDone && counts[model.Done] > 0 {
+			out += faint.Render(" (H:hidden)")
 		}
 		return out
 	}

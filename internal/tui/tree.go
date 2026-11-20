@@ -16,6 +16,7 @@ type row struct {
 	item    *model.Item
 	depth   int
 	hasKids bool
+	rollup  string // epic/story ticket progress, e.g. "12/19"
 
 	// Board section rows have no item.
 	group model.Status
@@ -27,15 +28,48 @@ type row struct {
 // flatten turns the item hierarchy into visible rows, descending only into
 // expanded items. Items whose parent is missing are shown at the root.
 func flatten(items []*model.Item, expanded map[string]bool) []row {
+	return flattenFiltered(items, expanded, false)
+}
+
+// flattenFiltered is flatten with an option to hide completed tickets (and
+// completed stories whose tickets are all done) so large repos stay scannable.
+func flattenFiltered(items []*model.Item, expanded map[string]bool, hideDone bool) []row {
 	known := map[string]bool{}
 	for _, it := range items {
 		known[it.ID] = true
 	}
+	visibleKids := func(id string) []*model.Item {
+		kids := store.Children(items, id)
+		if !hideDone {
+			return kids
+		}
+		var out []*model.Item
+		for _, k := range kids {
+			if k.Kind == model.Ticket && k.Status == model.Done {
+				continue
+			}
+			if k.Kind == model.Story && k.Status == model.Done {
+				// Hide finished stories when every ticket under them is done.
+				done, total, _, _ := render.Rollup(k, items)
+				if total == 0 || done == total {
+					continue
+				}
+			}
+			out = append(out, k)
+		}
+		return out
+	}
 	var rows []row
 	var walk func(it *model.Item, depth int)
 	walk = func(it *model.Item, depth int) {
-		kids := store.Children(items, it.ID)
-		rows = append(rows, row{item: it, depth: depth, hasKids: len(kids) > 0})
+		kids := visibleKids(it.ID)
+		rollup := ""
+		if it.Kind != model.Ticket {
+			if done, total, _, _ := render.Rollup(it, items); total > 0 {
+				rollup = fmt.Sprintf("%d/%d", done, total)
+			}
+		}
+		rows = append(rows, row{item: it, depth: depth, hasKids: len(kids) > 0, rollup: rollup})
 		if expanded[it.ID] {
 			for _, k := range kids {
 				walk(k, depth+1)
@@ -44,6 +78,9 @@ func flatten(items []*model.Item, expanded map[string]bool) []row {
 	}
 	for _, it := range items {
 		if it.Parent == "" || !known[it.Parent] {
+			if hideDone && it.Kind == model.Ticket && it.Status == model.Done {
+				continue
+			}
 			walk(it, 0)
 		}
 	}
@@ -105,8 +142,15 @@ func renderRow(r row, expanded, selected, focused bool, width int, d density) st
 		title = epicStyle.Render(title)
 	}
 	left := faint.Render(indent+arrow) + styled + " " +
-		idStyle.Render(it.ID) + " " + handMark(it) + title
+		idStyle.Render(it.ID) + " " + handMark(it) + flagMark(it) + title
 	right := rowMeta(it, d, max(10, width/3))
+	if r.rollup != "" && d != densityMinimal {
+		if right == "" {
+			right = faint.Render(r.rollup)
+		} else {
+			right = faint.Render(r.rollup) + faint.Render(" · ") + right
+		}
+	}
 	w := width
 	if selected {
 		w-- // the status gutter
@@ -164,7 +208,7 @@ func rowMeta(it *model.Item, d density, maxWidth int) string {
 		add(fmt.Sprintf("%d/%d", r, t), faint)
 	}
 	if age := render.Age(it.Updated); age != "" && age != "just now" {
-		add(age, faint)
+		add(age, render.StaleAgeStyle(it.Status, it.Updated))
 	}
 	if d == densityLabelled {
 		add(statusLabel(it.Status), render.StatusStyle(it.Status))
@@ -201,6 +245,17 @@ func handMark(it *model.Item) string {
 		return ""
 	}
 	return handStyle.Render("✋") + " "
+}
+
+// flagMark shows 🔒 when an item carries a security or human-gate label.
+func flagMark(it *model.Item) string {
+	for _, l := range it.Labels {
+		switch strings.ToLower(l) {
+		case "security", "security-flagged", "needs-human":
+			return handStyle.Render("🔒") + " "
+		}
+	}
+	return ""
 }
 
 var prStyles = map[string]lipgloss.Style{
