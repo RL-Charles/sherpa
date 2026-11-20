@@ -1,17 +1,14 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/RL-Charles/sherpa/internal/gitinfo"
-	"github.com/RL-Charles/sherpa/internal/journal"
+	"github.com/RL-Charles/sherpa/internal/actions"
 	"github.com/RL-Charles/sherpa/internal/model"
-	"github.com/RL-Charles/sherpa/internal/workflow"
 )
 
 // Needs-you inbox -------------------------------------------------------------
@@ -83,28 +80,12 @@ func (m *Model) approve() {
 	if it == nil {
 		return
 	}
-	if err := workflow.CheckTransition(m.actor, it, model.Done); err != nil {
+	msg, err := actions.Approve(m.store, m.who(), it.ID, "")
+	if err != nil {
 		m.flash = "⚠ " + err.Error()
 		return
 	}
-	var ticked []string
-	for _, n := range it.OpenManual() {
-		c := &it.Checks[n-1]
-		c.Done, c.Evidence = true, "verified by "+m.actor.Name
-		ticked = append(ticked, fmt.Sprintf("✋ check %d: %s", n, c.Text))
-	}
-	from := it.Status
-	it.Status = model.Done
-	if err := m.store.Save(it); err != nil {
-		m.flash = "⚠ " + err.Error()
-		return
-	}
-	_ = journal.Append(m.store.Dir, journal.Event{
-		Actor: m.actor.String(), Session: m.session, Item: it.ID, Type: "status",
-		From: string(from), To: string(model.Done), Message: "approved from the needs-you inbox", Detail: ticked,
-		Commit: gitinfo.Head(m.store.CodeRoot),
-	})
-	m.flash = "✓ " + it.ID + " approved · done"
+	m.flash = "✓ " + msg
 	m.reloadKeep()
 }
 
@@ -150,26 +131,12 @@ func (m *Model) rejectKey(msg tea.KeyMsg) {
 // sendBack returns a ticket to in progress with the reviewer's note, as
 // `shp review --reject` does.
 func (m *Model) sendBack(id, note string) {
-	it, err := m.store.Get(id)
+	msg, err := actions.SendBack(m.store, m.who(), id, note)
 	if err != nil {
 		m.flash = "⚠ " + err.Error()
 		return
 	}
-	if err := workflow.CheckTransition(m.actor, it, model.InProgress); err != nil {
-		m.flash = "⚠ " + err.Error()
-		return
-	}
-	from := it.Status
-	it.Status = model.InProgress
-	if err := m.store.Save(it); err != nil {
-		m.flash = "⚠ " + err.Error()
-		return
-	}
-	_ = journal.Append(m.store.Dir, journal.Event{
-		Actor: m.actor.String(), Session: m.session, Item: id, Type: "review", Kind: "reject",
-		From: string(from), To: string(model.InProgress), Message: note, Commit: gitinfo.Head(m.store.CodeRoot),
-	})
-	m.flash = "↩ " + id + " sent back"
+	m.flash = "↩ " + msg
 	m.reloadKeep()
 }
 

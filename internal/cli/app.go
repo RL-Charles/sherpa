@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 
+	"github.com/RL-Charles/sherpa/internal/actions"
 	"github.com/RL-Charles/sherpa/internal/journal"
 	"github.com/RL-Charles/sherpa/internal/live"
 	"github.com/RL-Charles/sherpa/internal/model"
@@ -182,7 +185,103 @@ func (a *app) appCmd() *cobra.Command {
 			return a.emit(item)
 		},
 	})
+	cmd.AddCommand(a.appStatusCmd(), a.appApproveCmd(), a.appRejectCmd(), a.appEditCmd())
 	return cmd
+}
+
+// The app's changes run the same shared actions as the TUI, as the person
+// at the desktop, and answer with {"message": "..."} for the app to show.
+
+type appResult struct {
+	Message string `json:"message"`
+	Merged  bool   `json:"merged,omitempty"`
+	Body    string `json:"body,omitempty"`
+}
+
+func (a *app) who() actions.Who { return actions.Who{Actor: a.actor, Session: a.session} }
+
+func (a *app) appStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "status <id> <status>", Short: "Move an item to a status, as the TUI's picker does", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.load(); err != nil {
+				return err
+			}
+			to, err := model.ParseStatus(args[1])
+			if err != nil {
+				return err
+			}
+			msg, err := actions.SetStatus(a.store, a.who(), args[0], to)
+			if err != nil {
+				return err
+			}
+			return a.emit(appResult{Message: msg})
+		},
+	}
+}
+
+func (a *app) appApproveCmd() *cobra.Command {
+	var note string
+	cmd := &cobra.Command{
+		Use: "approve <id>", Short: "Approve reviewed work, as the TUI inbox does", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.load(); err != nil {
+				return err
+			}
+			msg, err := actions.Approve(a.store, a.who(), args[0], note)
+			if err != nil {
+				return err
+			}
+			return a.emit(appResult{Message: msg})
+		},
+	}
+	cmd.Flags().StringVarP(&note, "message", "m", "", "note for the journal")
+	return cmd
+}
+
+func (a *app) appRejectCmd() *cobra.Command {
+	var note string
+	cmd := &cobra.Command{
+		Use: "reject <id>", Short: "Send reviewed work back with a note", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.load(); err != nil {
+				return err
+			}
+			msg, err := actions.SendBack(a.store, a.who(), args[0], note)
+			if err != nil {
+				return err
+			}
+			return a.emit(appResult{Message: msg})
+		},
+	}
+	cmd.Flags().StringVarP(&note, "message", "m", "", "what needs fixing")
+	return cmd
+}
+
+func (a *app) appEditCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "edit <id>",
+		Short: `Save a body from stdin JSON {"base": ..., "body": ..., "force": bool}`,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.load(); err != nil {
+				return err
+			}
+			var in struct {
+				Base  string `json:"base"`
+				Body  string `json:"body"`
+				Force bool   `json:"force"`
+			}
+			if err := json.NewDecoder(os.Stdin).Decode(&in); err != nil {
+				return fmt.Errorf("read edit: %w", err)
+			}
+			body, merged, err := actions.SaveBody(a.store, a.who(), args[0], in.Base, in.Body, "the app", in.Force)
+			if err != nil {
+				return err
+			}
+			return a.emit(appResult{Message: "saved " + strings.ToUpper(args[0]), Merged: merged, Body: body})
+		},
+	}
 }
 
 func buildAppSnapshot(s *store.Store, now time.Time) (appSnapshot, error) {

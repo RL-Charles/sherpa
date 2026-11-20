@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/RL-Charles/sherpa/internal/actions"
 	"github.com/RL-Charles/sherpa/internal/journal"
 	"github.com/RL-Charles/sherpa/internal/live"
 	"github.com/RL-Charles/sherpa/internal/model"
@@ -423,43 +425,29 @@ func (m *Model) save(force bool) bool {
 	if !m.ed.dirty {
 		return true
 	}
-	cur, err := m.store.Get(m.editID)
+	body, merged, err := actions.SaveBody(m.store, m.who(), m.editID, m.editBase, m.ed.body(), "TUI", force)
+	if errors.Is(err, actions.ErrConflict) {
+		m.conflict = true
+		m.flash = "⚠ " + m.editID + " changed on disk while you edited · :w! overwrite · :q! discard yours"
+		return false
+	}
 	if err != nil {
 		m.flash = "⚠ " + err.Error()
 		return false
 	}
-	body, merged := m.ed.body(), false
-	if cur.Body != m.editBase && !force {
-		// The common case is an agent appending worklog lines: keep them,
-		// after the user's version. Anything else is a real conflict.
-		base := strings.TrimRight(m.editBase, "\n")
-		if !strings.HasPrefix(cur.Body, base) {
-			m.conflict = true
-			m.flash = "⚠ " + m.editID + " changed on disk while you edited · :w! overwrite · :q! discard yours"
-			return false
-		}
-		body = strings.TrimRight(body, "\n") + cur.Body[len(base):]
-		merged = true
-	}
-	cur.Body = body
 	if merged {
 		m.ed.lines = strings.Split(strings.TrimRight(body, "\n"), "\n")
 	}
-	if err := m.store.Save(cur); err != nil {
-		m.flash = "⚠ " + err.Error()
-		return false
-	}
-	_ = journal.Append(m.store.Dir, journal.Event{
-		Actor: m.actor.String(), Session: m.session, Item: cur.ID, Type: "edit", Message: "edited body in TUI",
-	})
-	m.editBase = cur.Body
+	m.editBase = body
 	m.ed.dirty, m.conflict = false, false
-	m.flash = "✓ saved " + cur.ID
+	m.flash = "✓ saved " + m.editID
 	if merged {
 		m.flash += " · kept new lines added on disk meanwhile"
 	}
-	if p := model.GoalProblem(cur); p != "" {
-		m.flash += " · ⚠ " + p
+	if cur, err := m.store.Get(m.editID); err == nil {
+		if p := model.GoalProblem(cur); p != "" {
+			m.flash += " · ⚠ " + p
+		}
 	}
 	return true
 }

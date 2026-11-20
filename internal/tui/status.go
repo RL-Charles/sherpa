@@ -9,11 +9,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/RL-Charles/sherpa/internal/gitinfo"
-	"github.com/RL-Charles/sherpa/internal/journal"
+	"github.com/RL-Charles/sherpa/internal/actions"
 	"github.com/RL-Charles/sherpa/internal/model"
 	"github.com/RL-Charles/sherpa/internal/render"
-	"github.com/RL-Charles/sherpa/internal/workflow"
 )
 
 // Status picker ---------------------------------------------------------------
@@ -72,30 +70,12 @@ func (m *Model) pickKey(msg tea.KeyMsg) {
 func (m *Model) applyStatus(to model.Status) {
 	id := m.pick.id
 	m.closePicker()
-	it, err := m.store.Get(id)
+	msg, err := actions.SetStatus(m.store, m.who(), id, to)
 	if err != nil {
 		m.flash = "⚠ " + err.Error()
 		return
 	}
-	if it.Status == to {
-		m.flash = "· " + id + " is already " + statusLabel(to)
-		return
-	}
-	if err := workflow.CheckTransition(m.actor, it, to); err != nil {
-		m.flash = "⚠ " + err.Error()
-		return
-	}
-	from := it.Status
-	it.Status = to
-	if err := m.store.Save(it); err != nil {
-		m.flash = "⚠ " + err.Error()
-		return
-	}
-	_ = journal.Append(m.store.Dir, journal.Event{
-		Actor: m.actor.String(), Session: m.session, Item: id, Type: "status",
-		From: string(from), To: string(to), Commit: gitinfo.Head(m.store.CodeRoot),
-	})
-	m.flash = fmt.Sprintf("✓ %s %s → %s", id, statusLabel(from), statusLabel(to))
+	m.flash = "✓ " + msg
 	m.reloadKeep()
 }
 
@@ -155,3 +135,6 @@ func (m *Model) clickPicker(x, y int) bool {
 	}
 	return true
 }
+
+// who is the person at the TUI, for shared actions.
+func (m *Model) who() actions.Who { return actions.Who{Actor: m.actor, Session: m.session} }
