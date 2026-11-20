@@ -14,6 +14,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/RL-Charles/sherpa/internal/journal"
+
+	"github.com/RL-Charles/sherpa/internal/palette"
 )
 
 type Session struct {
@@ -89,19 +91,19 @@ func Build(events []journal.Event) []Session {
 // Rendering ---------------------------------------------------------------------
 
 var (
-	faint    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "243"})
-	title    = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "39"})
+	faint    = lipgloss.NewStyle().Foreground(palette.Muted)
+	title    = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(palette.Secondary)
 	sessHead = lipgloss.NewStyle().Bold(true)
-	plus     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "78"})
-	minus    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"})
-	openTag  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"})
+	plus     = lipgloss.NewStyle().Foreground(palette.Green)
+	minus    = lipgloss.NewStyle().Foreground(palette.Red)
+	openTag  = lipgloss.NewStyle().Foreground(palette.Yellow)
 	colors   = map[string]lipgloss.Style{
-		"cyan":    lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "45"}),
-		"green":   lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "78"}),
-		"magenta": lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "162", Dark: "205"}),
-		"red":     lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"}),
-		"yellow":  lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"}),
-		"blue":    lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "39"}),
+		"cyan":    lipgloss.NewStyle().Foreground(palette.Primary),
+		"green":   lipgloss.NewStyle().Foreground(palette.Green),
+		"magenta": lipgloss.NewStyle().Foreground(palette.Purple),
+		"red":     lipgloss.NewStyle().Foreground(palette.Red),
+		"yellow":  lipgloss.NewStyle().Foreground(palette.Yellow),
+		"blue":    lipgloss.NewStyle().Foreground(palette.Secondary),
 		"faint":   faint,
 		"":        lipgloss.NewStyle(),
 	}

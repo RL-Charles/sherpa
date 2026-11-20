@@ -10,6 +10,8 @@ import (
 	"github.com/RL-Charles/sherpa/internal/model"
 	"github.com/RL-Charles/sherpa/internal/render"
 	"github.com/RL-Charles/sherpa/internal/store"
+
+	"github.com/RL-Charles/sherpa/internal/palette"
 )
 
 type row struct {
@@ -89,13 +91,13 @@ func flattenFiltered(items []*model.Item, expanded map[string]bool, hideDone boo
 
 var (
 	selectedFocused = lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.AdaptiveColor{Light: "232", Dark: "252"}).
-			Background(lipgloss.AdaptiveColor{Light: "254", Dark: "237"})
+			Foreground(palette.SelectedFg).
+			Background(palette.SelectedBg)
 	selectedBlurred = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "236", Dark: "250"}).
-			Background(lipgloss.AdaptiveColor{Light: "254", Dark: "236"})
-	faint     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "243"})
-	idStyle   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "243", Dark: "244"})
+			Foreground(palette.SelectedDimFg).
+			Background(palette.SelectedDimBg)
+	faint     = lipgloss.NewStyle().Foreground(palette.Muted)
+	idStyle   = lipgloss.NewStyle().Foreground(palette.ID)
 	epicStyle = lipgloss.NewStyle().Bold(true)
 )
 
@@ -237,7 +239,7 @@ func rowMeta(it *model.Item, d density, maxWidth int) string {
 	return strings.Join(out, sep)
 }
 
-var handStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"})
+var handStyle = lipgloss.NewStyle().Foreground(palette.Yellow)
 
 // handMark is a ✋ before the title while manual checks wait for a human.
 func handMark(it *model.Item) string {
@@ -259,10 +261,10 @@ func flagMark(it *model.Item) string {
 }
 
 var prStyles = map[string]lipgloss.Style{
-	"merged": lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "55", Dark: "99"}),
-	"open":   lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "78"}),
-	"draft":  lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "240"}),
-	"closed": lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"}),
+	"merged": lipgloss.NewStyle().Foreground(palette.Purple),
+	"open":   lipgloss.NewStyle().Foreground(palette.Green),
+	"draft":  lipgloss.NewStyle().Foreground(palette.Subtle),
+	"closed": lipgloss.NewStyle().Foreground(palette.Red),
 }
 
 // prBadge is a small ⇡ in the metadata column when a PR is linked.

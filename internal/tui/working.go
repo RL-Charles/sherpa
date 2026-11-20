@@ -9,6 +9,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/RL-Charles/sherpa/internal/live"
+
+	"github.com/RL-Charles/sherpa/internal/palette"
 )
 
 // Live "agent working" indicator ----------------------------------------------
@@ -22,7 +24,7 @@ var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"
 
 const spinEvery = 100 * time.Millisecond
 
-var workStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "162", Dark: "205"}).Bold(true)
+var workStyle = lipgloss.NewStyle().Foreground(palette.Accent).Bold(true)
 
 type spinMsg struct{}
 

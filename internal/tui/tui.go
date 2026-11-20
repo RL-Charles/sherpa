@@ -23,6 +23,8 @@ import (
 	"github.com/RL-Charles/sherpa/internal/store"
 	"github.com/RL-Charles/sherpa/internal/workflow"
 	"github.com/RL-Charles/sherpa/internal/worklog"
+
+	"github.com/RL-Charles/sherpa/internal/palette"
 )
 
 // reloadEvery is how often the TUI re-reads .sherpa/ so agent activity shows up live.
@@ -690,15 +692,15 @@ func (m *Model) refreshPreview() {
 // View --------------------------------------------------------------------
 
 var (
-	titleStyle                           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "45"})
-	editStyle                            = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"})
-	errStyle                             = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"})
-	okStyle                              = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "78"})
-	normalBadge                          = lipgloss.NewStyle().Bold(true).Background(lipgloss.AdaptiveColor{Light: "37", Dark: "45"}).Foreground(lipgloss.AdaptiveColor{Light: "255", Dark: "0"})
-	insertBadge                          = lipgloss.NewStyle().Bold(true).Background(lipgloss.AdaptiveColor{Light: "136", Dark: "214"}).Foreground(lipgloss.AdaptiveColor{Light: "255", Dark: "0"})
-	focusedBorder lipgloss.TerminalColor = lipgloss.AdaptiveColor{Light: "30", Dark: "45"}
-	editBorder    lipgloss.TerminalColor = lipgloss.AdaptiveColor{Light: "136", Dark: "214"}
-	blurredBorder lipgloss.TerminalColor = lipgloss.AdaptiveColor{Light: "250", Dark: "240"}
+	titleStyle                           = lipgloss.NewStyle().Bold(true).Foreground(palette.Primary)
+	editStyle                            = lipgloss.NewStyle().Bold(true).Foreground(palette.Yellow)
+	errStyle                             = lipgloss.NewStyle().Foreground(palette.Red)
+	okStyle                              = lipgloss.NewStyle().Foreground(palette.Green)
+	normalBadge                          = lipgloss.NewStyle().Bold(true).Background(palette.Primary).Foreground(palette.OnAccent)
+	insertBadge                          = lipgloss.NewStyle().Bold(true).Background(palette.Yellow).Foreground(palette.OnAccent)
+	focusedBorder lipgloss.TerminalColor = palette.Primary
+	editBorder    lipgloss.TerminalColor = palette.Yellow
+	blurredBorder lipgloss.TerminalColor = palette.BorderDim
 )
 
 func (m *Model) View() string {

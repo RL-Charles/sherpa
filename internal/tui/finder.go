@@ -12,6 +12,8 @@ import (
 	"github.com/RL-Charles/sherpa/internal/model"
 	"github.com/RL-Charles/sherpa/internal/render"
 	"github.com/RL-Charles/sherpa/internal/search"
+
+	"github.com/RL-Charles/sherpa/internal/palette"
 )
 
 // Finder ------------------------------------------------------------------------
@@ -34,8 +36,8 @@ type finder struct {
 }
 
 var (
-	findPrompt = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "45"}).Bold(true)
-	findHit    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"}).Bold(true)
+	findPrompt = lipgloss.NewStyle().Foreground(palette.Primary).Bold(true)
+	findHit    = lipgloss.NewStyle().Foreground(palette.Yellow).Bold(true)
 )
 
 func (m *Model) openFinder() {

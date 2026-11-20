@@ -13,6 +13,8 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/RL-Charles/sherpa/internal/render"
+
+	"github.com/RL-Charles/sherpa/internal/palette"
 )
 
 // editor is the preview pane. Outside edit mode it shows the whole item
@@ -52,9 +54,9 @@ type snapshot struct {
 const maxUndo = 200
 
 var (
-	gutter            = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "45"}).Render("▎ ")
+	gutter            = lipgloss.NewStyle().Foreground(palette.Primary).Render("▎ ")
 	cursorStyle       = lipgloss.NewStyle().Reverse(true)
-	insertCursorStyle = lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Light: "136", Dark: "214"}).Foreground(lipgloss.AdaptiveColor{Light: "255", Dark: "0"})
+	insertCursorStyle = lipgloss.NewStyle().Background(palette.Yellow).Foreground(palette.OnAccent)
 )
 
 func newEditor(style string) *editor {

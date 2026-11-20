@@ -18,14 +18,16 @@ import (
 
 	"github.com/RL-Charles/sherpa/internal/model"
 	"github.com/RL-Charles/sherpa/internal/store"
+
+	"github.com/RL-Charles/sherpa/internal/palette"
 )
 
 func IsTTY() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 
 var (
-	dim   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "243"})
+	dim   = lipgloss.NewStyle().Foreground(palette.Muted)
 	bold  = lipgloss.NewStyle().Bold(true)
-	idCol = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "243", Dark: "244"})
+	idCol = lipgloss.NewStyle().Foreground(palette.ID)
 )
 
 // Age is a compact, human duration since t: "just now", "5m", "3h", "2d",
@@ -66,31 +68,31 @@ func Ago(t time.Time) string {
 // statusColor keeps the seven states visually distinct. The palette is
 // adaptive so light terminals keep contrast, and red is reserved for blocked.
 var statusColor = map[model.Status]lipgloss.TerminalColor{
-	model.Backlog:     lipgloss.AdaptiveColor{Light: "245", Dark: "240"},
-	model.Ready:       lipgloss.AdaptiveColor{Light: "25", Dark: "39"},
-	model.InProgress:  lipgloss.AdaptiveColor{Light: "136", Dark: "214"},
-	model.AgentReview: lipgloss.AdaptiveColor{Light: "91", Dark: "141"},
-	model.Review:      lipgloss.AdaptiveColor{Light: "162", Dark: "205"},
-	model.Blocked:     lipgloss.AdaptiveColor{Light: "124", Dark: "203"},
-	model.Done:        lipgloss.AdaptiveColor{Light: "28", Dark: "78"},
+	model.Backlog:     palette.Subtle,
+	model.Ready:       palette.Secondary,
+	model.InProgress:  palette.Yellow,
+	model.AgentReview: palette.Purple,
+	model.Review:      palette.Orange,
+	model.Blocked:     palette.Red,
+	model.Done:        palette.Green,
 }
 
 // StatusStyle colours text by status.
 func StatusStyle(s model.Status) lipgloss.Style {
 	c, ok := statusColor[s]
 	if !ok {
-		c = lipgloss.AdaptiveColor{Light: "245", Dark: "240"}
+		c = palette.Subtle
 	}
 	return lipgloss.NewStyle().Foreground(c)
 }
 
 var (
-	staleWarnStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "214"})
-	staleCritStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"}).Bold(true)
-	nowLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "30", Dark: "45"}).Bold(true)
-	nextLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "78"}).Bold(true)
-	blkLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"}).Bold(true)
-	chipStyle      = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "243"})
+	staleWarnStyle = lipgloss.NewStyle().Foreground(palette.Yellow)
+	staleCritStyle = lipgloss.NewStyle().Foreground(palette.Red).Bold(true)
+	nowLabelStyle  = lipgloss.NewStyle().Foreground(palette.Primary).Bold(true)
+	nextLabelStyle = lipgloss.NewStyle().Foreground(palette.Green).Bold(true)
+	blkLabelStyle  = lipgloss.NewStyle().Foreground(palette.Red).Bold(true)
+	chipStyle      = lipgloss.NewStyle().Foreground(palette.Muted)
 )
 
 // StaleAgeStyle highlights aging in-progress and review work so stale tickets
@@ -218,19 +220,42 @@ func Style(name string) gansi.StyleConfig {
 			name = styles.DarkStyle
 		}
 	}
-	cfg, h2, h3, minor := styles.DarkStyleConfig, "39", "75", "245"
-	if name == styles.LightStyle {
-		cfg, h2, h3, minor = styles.LightStyleConfig, "27", "33", "240"
+	// Glamour's standard layout, recoloured with Nord (internal/palette).
+	pick := func(c lipgloss.AdaptiveColor) string {
+		if name == styles.LightStyle {
+			return c.Light
+		}
+		return c.Dark
 	}
+	cfg := styles.DarkStyleConfig
+	if name == styles.LightStyle {
+		cfg = styles.LightStyleConfig
+	}
+	str := func(v string) *string { return &v }
+	h2, h3, minor := pick(palette.Primary), pick(palette.Secondary), pick(palette.Muted)
 	heading := func(color string, underline bool) gansi.StyleBlock {
 		return gansi.StyleBlock{StylePrimitive: gansi.StylePrimitive{Color: &color, Bold: &yes, Underline: &underline}}
 	}
+	cfg.Document.StylePrimitive.Color = str(pick(palette.Text))
+	cfg.Heading.StylePrimitive.Color = str(pick(palette.Primary))
+	cfg.H1.StylePrimitive.Color = str(pick(palette.OnAccent))
+	cfg.H1.StylePrimitive.BackgroundColor = str(pick(palette.Primary))
 	cfg.H2 = heading(h2, true)
 	cfg.H2.BlockPrefix = "\n" + strings.Repeat("─", 28) + "\n"
 	cfg.H3 = heading(h3, false)
 	cfg.H4 = heading(minor, false)
 	cfg.H5 = heading(minor, false)
 	cfg.H6 = heading(minor, false)
+	cfg.BlockQuote.StylePrimitive.Color = str(pick(palette.Muted))
+	cfg.HorizontalRule.Color = str(pick(palette.Subtle))
+	cfg.Link.Color = str(pick(palette.Secondary))
+	cfg.LinkText.Color = str(pick(palette.Primary))
+	cfg.Strong.Color = str(pick(palette.Bright))
+	cfg.Code.StylePrimitive.Color = str(pick(palette.Accent))
+	cfg.Code.StylePrimitive.BackgroundColor = str(pick(palette.SelectedDimBg))
+	cfg.CodeBlock.Theme = "nord"
+	cfg.CodeBlock.Chroma = nil // use the theme above, not Glamour's own token colours
+	cfg.Table.StylePrimitive.Color = str(pick(palette.Text))
 	return cfg
 }
 

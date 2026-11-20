@@ -6,6 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+
+	"github.com/RL-Charles/sherpa/internal/palette"
 )
 
 // Markdown tables are drawn with lipgloss instead of Glamour, which only
@@ -25,9 +27,9 @@ import (
 var (
 	reTableSep = regexp.MustCompile(`^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$`)
 
-	tableBorder = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "250", Dark: "240"})
-	tableHeader = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "39"})
-	cellCode    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"}).Background(lipgloss.AdaptiveColor{Light: "254", Dark: "236"})
+	tableBorder = lipgloss.NewStyle().Foreground(palette.BorderDim)
+	tableHeader = lipgloss.NewStyle().Bold(true).Foreground(palette.Secondary)
+	cellCode    = lipgloss.NewStyle().Foreground(palette.Red).Background(palette.SelectedDimBg)
 	cellBold    = lipgloss.NewStyle().Bold(true)
 	cellItalic  = lipgloss.NewStyle().Italic(true)
 	cellStrike  = lipgloss.NewStyle().Strikethrough(true)
