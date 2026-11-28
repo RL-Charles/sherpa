@@ -1049,6 +1049,25 @@ func reviewWarnings(it *model.Item) []string {
 	return w
 }
 
+// writeLinks stores l as the links of item id as the item is on disk now,
+// not on the copy sync loaded before its GitHub calls, which can take
+// minutes: checks, deliverables, design or status written meanwhile (by
+// another session, or arriving through a file sync) are kept. It keeps
+// Updated (sync isn't an edit) and reports whether it wrote.
+func (a *app) writeLinks(id string, l *model.Links) (bool, error) {
+	fresh, err := a.store.Get(id)
+	if err != nil {
+		return false, err
+	}
+	before, _ := json.Marshal(fresh.Links)
+	after, _ := json.Marshal(l)
+	if string(before) == string(after) {
+		return false, nil
+	}
+	fresh.Links = l
+	return true, a.store.Write(fresh)
+}
+
 func (a *app) syncCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "sync [id...]",
@@ -1117,13 +1136,14 @@ has "Ticket: <id>".`,
 				if l.Empty() {
 					continue
 				}
-				it.Links = l
-				after, _ := json.Marshal(it.Links)
+				after, _ := json.Marshal(l)
 				if string(before) == string(after) {
 					continue
 				}
-				if err := a.store.Write(it); err != nil { // keep Updated: sync isn't an edit
+				if wrote, err := a.writeLinks(it.ID, l); err != nil {
 					return err
+				} else if !wrote {
+					continue
 				}
 				if isNew && l.PR != "" {
 					linked++
